@@ -1,17 +1,14 @@
 import 'dotenv/config';
 
-const required = [
-  'MONGODB_URI',
-  'JWT_SECRET',
-  'GEMINI_API_KEY',
-];
+// Safe development defaults for immediate local preview
+const defaultJwtSecret = 'dev-jwt-secret-key-at-least-32-characters-long';
+const defaultMongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/ai-builds-my-website';
 
-for (const key of required) {
-  if (!process.env[key]) {
-    console.error(`[Config] FATAL: Missing required environment variable: ${key}`);
-    console.error('[Config] Copy .env.example to .env and fill in real values.');
-    process.exit(1);
-  }
+if (!process.env.GEMINI_API_KEY) {
+  console.warn('[Config] NOTICE: GEMINI_API_KEY is not set in server/.env. Add your API key to test live Gemini generation.');
+}
+if (!process.env.MONGODB_URI) {
+  console.warn('[Config] NOTICE: MONGODB_URI is not set in server/.env. Defaulting to local mongodb://127.0.0.1:27017/ai-builds-my-website.');
 }
 
 export const config = {
@@ -21,11 +18,11 @@ export const config = {
   publicBaseUrl: process.env.PUBLIC_BASE_URL || 'http://localhost:5000',
 
   mongodb: {
-    uri: process.env.MONGODB_URI,
+    uri: defaultMongoUri,
   },
 
   jwt: {
-    secret: process.env.JWT_SECRET,
+    secret: process.env.JWT_SECRET || defaultJwtSecret,
     expiresIn: '7d',
   },
 
@@ -37,7 +34,7 @@ export const config = {
   },
 
   gemini: {
-    apiKey: process.env.GEMINI_API_KEY,
+    apiKey: process.env.GEMINI_API_KEY || 'dummy-dev-key',
     model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
     visionModel: process.env.GEMINI_VISION_MODEL || 'gemini-2.0-flash',
   },

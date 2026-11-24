@@ -1,11 +1,8 @@
 import jwt from 'jsonwebtoken';
-import mongoose from 'mongoose';
+import { User } from '../../models/index.js';
 import { config } from '../../config/index.js';
 import { success } from '../../utils/response.js';
 import { logger } from '../../utils/logger.js';
-
-/** @returns {import('mongoose').Model} */
-const getUserModel = () => mongoose.model('User');
 
 /**
  * Sign a JWT for the given user payload.
@@ -34,7 +31,6 @@ const setCookie = (res, token) => {
 export const register = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
-    const User = getUserModel();
 
     const existing = await User.findOne({ email });
     if (existing) {
@@ -44,7 +40,7 @@ export const register = async (req, res, next) => {
       });
     }
 
-    const user = await User.create({ name, email, password });
+    const user = await User.create({ name, email, password, passwordHash: password });
 
     const token = signToken({ id: user._id.toString(), email: user.email });
     setCookie(res, token);
@@ -74,7 +70,6 @@ export const register = async (req, res, next) => {
 export const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    const User = getUserModel();
 
     // Select passwordHash explicitly since it's likely hidden by default
     const user = await User.findOne({ email }).select('+passwordHash');
@@ -134,8 +129,7 @@ export const logout = (req, res, next) => {
 
 export const getMe = async (req, res, next) => {
   try {
-    const User = getUserModel();
-    const user = await User.findById(req.user.id).select('-passwordHash');
+    const user = await User.findById(req.user.id);
 
     if (!user) {
       return res.status(404).json({
