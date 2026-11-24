@@ -1,0 +1,36 @@
+# Dependency and build artifacts
+node_modules/
+dist/
+build/
+.cache/
+
+# Environment files - NEVER commit these
+.env
+.env.local
+.env.production
+server/.env
+client/.env
+
+# Uploaded files (dev only - use cloud storage in production)
+server/uploads/*
+!server/uploads/.gitkeep
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.vscode/
+.idea/
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.temp

@@ -1,0 +1,130 @@
+/**
+ * Search provider abstraction.
+ *
+ * Reads config.search.provider and delegates to the appropriate backend:
+ *   - 'gemini'  → Gemini grounding search
+ *   - 'tavily'  → Tavily REST API
+ *   - anything else / missing key → returns error result without throwing
+ *
+ * Export:
+ *   search(query) → { success: boolean, results: [{ title, url, snippet, source }], error?: string }
+ */
+
+import { config } from '../../config/index.js';
+import { logger } from '../../utils/logger.js';
+import { searchWithGrounding } from '../gemini/gemini.client.js';
+
+const TAVILY_API_URL = 'https://api.tavily.com/search';
+
+// ---------------------------------------------------------------------------
+// Gemini provider
+// ---------------------------------------------------------------------------
+
+async function searchViaGemini(query) {
+  const { text, sources } = await searchWithGrounding(query);
+
+  // sources from grounding are { title, url }. Build normalised result list.
+  const results = sources.map((s) => ({
+    title: s.title,
+    url: s.url,
+    snippet: text.slice(0, 500), // grounding returns synthesised answer text
+    source: 'gemini',
+  }));
+
+  // If Gemini returns no discrete sources, still expose the synthesised text
+  if (results.length === 0 && text) {
+    results.push({
+      title: 'Gemini synthesised answer',
+      url: null,
+      snippet: text.slice(0, 1000),
+      source: 'gemini',
+    });
+  }
+
+  return { success: true, results };
+}
+
+// ---------------------------------------------------------------------------
+// Tavily provider
+// ---------------------------------------------------------------------------
+
+async function searchViaTavily(query) {
+  const apiKey = config.search.tavilyApiKey;
+
+  if (!apiKey) {
+    return {
+      success: false,
+      results: [],
+      error: 'Tavily API key not configured (TAVILY_API_KEY)',
+    };
+  }
+
+  const response = await fetch(TAVILY_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      query,
+      search_depth: 'basic',
+      include_answer: false,
+      max_results: 5,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Tavily HTTP ${response.status}: ${body.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+
+  const results = (data.results ?? []).map((r) => ({
+    title: r.title ?? '',
+    url: r.url ?? '',
+    snippet: r.content ?? r.snippet ?? '',
+    source: 'tavily',
+  }));
+
+  return { success: true, results };
+}
+
+// ---------------------------------------------------------------------------
+// Public export
+// ---------------------------------------------------------------------------
+
+/**
+ * Performs a web search using the configured provider.
+ *
+ * @param {string} query
+ * @returns {Promise<{ success: boolean, results: Array<{ title: string, url: string, snippet: string, source: string }>, error?: string }>}
+ */
+export async function search(query) {
+  const provider = (config.search.provider ?? 'none').toLowerCase();
+
+  try {
+    if (provider === 'gemini') {
+      return await searchViaGemini(query);
+    }
+
+    if (provider === 'tavily') {
+      return await searchViaTavily(query);
+    }
+
+    logger.warn(`[Search] Provider '${provider}' is not recognised or not configured`);
+    return {
+      success: false,
+      results: [],
+      error: 'Search provider not configured',
+    };
+  } catch (err) {
+    logger.error(`[Search] Provider '${provider}' error for query "${query}":`, err.message);
+    return {
+      success: false,
+      results: [],
+      error: err.message,
+    };
+  }
+}
