@@ -1,5 +1,4 @@
 import fs from 'fs/promises';
-import { Worker } from 'bullmq';
 import pdfParse from 'pdf-parse';
 import { Source } from '../models/index.js';
 import { config } from '../config/index.js';
@@ -9,10 +8,9 @@ import { analyzeImage } from '../integrations/gemini/gemini.client.js';
 import { extractFactsFromText, normalizeAndStoreFacts } from '../utils/factExtractor.js';
 import { getStorageService } from '../integrations/storage/storage.service.js';
 
-const connection = { url: config.redis.url };
-
 /**
  * Process a single Source record.
+ * Handles PDF text parsing, image analysis with Gemini Vision, and website/social scraping.
  */
 export async function processSourceRecord(sourceId) {
   const source = await Source.findById(sourceId);
@@ -84,16 +82,21 @@ Do NOT invent, assume, or fabricate any details not clearly legible in the image
   }
 }
 
-export const sourceWorker = new Worker(
-  'source-processing',
-  async (job) => {
-    logger.info(`[sourceWorker] Picked up job ${job.id} of type ${job.name}`);
-    const { sourceId } = job.data;
-    await processSourceRecord(sourceId);
-  },
-  { connection }
-);
-
-sourceWorker.on('failed', (job, err) => {
-  logger.error(`[sourceWorker] Job ${job?.id} failed:`, err.message);
-});
+// BullMQ Worker only initialized if USE_REDIS is true
+if (process.env.USE_REDIS === 'true') {
+  import('bullmq').then(({ Worker }) => {
+    const connection = { url: config.redis.url };
+    const sourceWorker = new Worker(
+      'source-processing',
+      async (job) => {
+        logger.info(`[sourceWorker] Picked up job ${job.id} of type ${job.name}`);
+        const { sourceId } = job.data;
+        await processSourceRecord(sourceId);
+      },
+      { connection }
+    );
+    sourceWorker.on('failed', (job, err) => {
+      logger.error(`[sourceWorker] Job ${job?.id} failed:`, err.message);
+    });
+  }).catch(() => {});
+}

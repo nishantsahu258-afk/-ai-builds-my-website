@@ -1,5 +1,10 @@
 /**
- * Gemini AI client using @google/genai SDK.
+ * Gemini AI client using official @google/genai SDK.
+ *
+ * Supported production models:
+ *   - 'gemini-2.0-flash' (recommended default text and vision)
+ *   - 'gemini-2.5-flash'
+ *   - 'gemini-1.5-flash'
  *
  * Exports:
  *   generateText(prompt, systemInstruction?)  → string
@@ -12,7 +17,15 @@ import { GoogleGenAI } from '@google/genai';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
 
-const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey });
+let _aiClient = null;
+
+function getClient() {
+  if (!_aiClient) {
+    const key = config.gemini.apiKey;
+    _aiClient = new GoogleGenAI({ apiKey: key || 'dummy-dev-key' });
+  }
+  return _aiClient;
+}
 
 function getText(response) {
   if (!response) return '';
@@ -27,27 +40,34 @@ function getText(response) {
   return part?.text || '';
 }
 
+function formatGeminiError(err) {
+  const msg = err.message || '';
+  if (msg.includes('API_KEY_INVALID') || msg.includes('403') || msg.includes('unregistered project')) {
+    return 'Invalid or unconfigured Gemini API key. Please check GEMINI_API_KEY in server/.env.';
+  }
+  if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
+    return 'Gemini API rate limit or quota exceeded. Please wait or check your Gemini API plan.';
+  }
+  if (msg.includes('NOT_FOUND') || msg.includes('404')) {
+    return `Configured Gemini model (${config.gemini.model}) is not available or deprecated. Try setting GEMINI_MODEL=gemini-2.0-flash.`;
+  }
+  return msg;
+}
+
 // ---------------------------------------------------------------------------
 // generateText
 // ---------------------------------------------------------------------------
 
-/**
- * Sends a text prompt to Gemini and returns the response string.
- *
- * @param {string} prompt
- * @param {string} [systemInstruction]
- * @returns {Promise<string>}
- */
 export async function generateText(prompt, systemInstruction = '') {
+  if (!config.gemini.apiKey || config.gemini.apiKey === 'dummy-dev-key') {
+    throw new Error('GEMINI_API_KEY is not configured in server/.env. Please provide a valid Gemini API key.');
+  }
+
+  const ai = getClient();
   try {
     const params = {
       model: config.gemini.model,
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }],
-        },
-      ],
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
     };
 
     if (systemInstruction) {
@@ -59,15 +79,11 @@ export async function generateText(prompt, systemInstruction = '') {
 
     const response = await ai.models.generateContent(params);
     const text = getText(response);
-
-    if (typeof text !== 'string') {
-      throw new Error('Gemini returned an unexpected response format');
-    }
-
     return text;
   } catch (err) {
-    logger.error('[Gemini] generateText failed:', err.message);
-    throw new Error(`Gemini generateText failed: ${err.message}`);
+    const userMsg = formatGeminiError(err);
+    logger.error('[Gemini] generateText failed:', userMsg);
+    throw new Error(userMsg);
   }
 }
 
@@ -75,30 +91,22 @@ export async function generateText(prompt, systemInstruction = '') {
 // generateJSON
 // ---------------------------------------------------------------------------
 
-/**
- * Sends a prompt instructing Gemini to return JSON and parses the result.
- *
- * @param {string} prompt
- * @param {string} [systemInstruction]
- * @param {object} [schema]  Optional schema description appended to prompt
- * @returns {Promise<object>}
- */
 export async function generateJSON(prompt, systemInstruction = '', schema = null) {
+  if (!config.gemini.apiKey || config.gemini.apiKey === 'dummy-dev-key') {
+    throw new Error('GEMINI_API_KEY is not configured in server/.env. Please provide a valid Gemini API key.');
+  }
+
+  const ai = getClient();
   try {
     const schemaHint = schema
       ? `\n\nExpected JSON schema:\n${JSON.stringify(schema, null, 2)}`
       : '';
 
-    const fullPrompt = `${prompt}${schemaHint}\n\nReturn ONLY valid JSON. Do not include markdown code fences, explanations, or any text outside the JSON object.`;
+    const fullPrompt = `${prompt}${schemaHint}\n\nReturn ONLY valid JSON. Do not include markdown code fences or explanations.`;
 
     const params = {
       model: config.gemini.model,
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: fullPrompt }],
-        },
-      ],
+      contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
     };
 
     if (systemInstruction) {
@@ -111,20 +119,18 @@ export async function generateJSON(prompt, systemInstruction = '', schema = null
     const response = await ai.models.generateContent(params);
     const raw = getText(response).trim();
 
-    // Strip markdown code fences if Gemini ignores the instruction
+    // Strip markdown code fences if present
     const stripped = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
 
-    let parsed;
     try {
-      parsed = JSON.parse(stripped);
+      return JSON.parse(stripped);
     } catch (parseErr) {
-      throw new Error(`Failed to parse Gemini JSON response: ${parseErr.message}. Raw: ${stripped.slice(0, 300)}`);
+      throw new Error(`Failed to parse Gemini JSON output: ${parseErr.message}. Raw: ${stripped.slice(0, 200)}`);
     }
-
-    return parsed;
   } catch (err) {
-    logger.error('[Gemini] generateJSON failed:', err.message);
-    throw new Error(`Gemini generateJSON failed: ${err.message}`);
+    const userMsg = formatGeminiError(err);
+    logger.error('[Gemini] generateJSON failed:', userMsg);
+    throw new Error(userMsg);
   }
 }
 
@@ -132,28 +138,21 @@ export async function generateJSON(prompt, systemInstruction = '', schema = null
 // analyzeImage
 // ---------------------------------------------------------------------------
 
-/**
- * Sends an image (base64 encoded) to Gemini Vision and returns the description.
- *
- * @param {string} imageBase64  Pure base64 string (no data URI prefix)
- * @param {string} mimeType     e.g. 'image/jpeg', 'image/png'
- * @param {string} prompt
- * @returns {Promise<string>}
- */
 export async function analyzeImage(imageBase64, mimeType, prompt) {
+  if (!config.gemini.apiKey || config.gemini.apiKey === 'dummy-dev-key') {
+    logger.warn('[Gemini] GEMINI_API_KEY not configured, skipping image analysis');
+    return 'Image uploaded (visual analysis requires GEMINI_API_KEY)';
+  }
+
+  const ai = getClient();
   try {
     const params = {
-      model: config.gemini.visionModel,
+      model: config.gemini.visionModel || config.gemini.model,
       contents: [
         {
           role: 'user',
           parts: [
-            {
-              inlineData: {
-                data: imageBase64,
-                mimeType,
-              },
-            },
+            { inlineData: { data: imageBase64, mimeType } },
             { text: prompt },
           ],
         },
@@ -161,16 +160,11 @@ export async function analyzeImage(imageBase64, mimeType, prompt) {
     };
 
     const response = await ai.models.generateContent(params);
-    const text = getText(response);
-
-    if (typeof text !== 'string') {
-      throw new Error('Gemini Vision returned an unexpected response format');
-    }
-
-    return text;
+    return getText(response);
   } catch (err) {
-    logger.error('[Gemini] analyzeImage failed:', err.message);
-    throw new Error(`Gemini analyzeImage failed: ${err.message}`);
+    const userMsg = formatGeminiError(err);
+    logger.error('[Gemini] analyzeImage failed:', userMsg);
+    throw new Error(userMsg);
   }
 }
 
@@ -178,29 +172,22 @@ export async function analyzeImage(imageBase64, mimeType, prompt) {
 // searchWithGrounding
 // ---------------------------------------------------------------------------
 
-/**
- * Performs a grounded search using Google Search grounding tool.
- *
- * @param {string} query
- * @returns {Promise<{ text: string, sources: Array<{ title: string, url: string }> }>}
- */
 export async function searchWithGrounding(query) {
+  if (!config.gemini.apiKey || config.gemini.apiKey === 'dummy-dev-key') {
+    return { text: '', sources: [] };
+  }
+
+  const ai = getClient();
   try {
     const params = {
       model: config.gemini.model,
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: query }],
-        },
-      ],
+      contents: [{ role: 'user', parts: [{ text: query }] }],
       tools: [{ googleSearch: {} }],
     };
 
     const response = await ai.models.generateContent(params);
     const text = getText(response);
 
-    // Extract grounding metadata / sources from the response candidates
     const sources = [];
     const candidates = response.candidates ?? [];
 
@@ -222,7 +209,8 @@ export async function searchWithGrounding(query) {
 
     return { text, sources };
   } catch (err) {
-    logger.error('[Gemini] searchWithGrounding failed:', err.message);
-    throw new Error(`Gemini searchWithGrounding failed: ${err.message}`);
+    const userMsg = formatGeminiError(err);
+    logger.error('[Gemini] searchWithGrounding failed:', userMsg);
+    throw new Error(userMsg);
   }
 }

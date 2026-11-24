@@ -10,7 +10,7 @@ import { logger } from '../../utils/logger.js';
 
 /**
  * Execute website generation logic.
- * Called either by the BullMQ worker or directly if Redis is unavailable.
+ * Called either by the in-process queue runner or optional BullMQ worker.
  */
 export async function executeWebsiteGeneration(projectId, jobId = null) {
   const job = jobId ? await GenerationJob.findById(jobId) : null;
@@ -141,24 +141,14 @@ export async function generateWebsite(req, res, next) {
       progress: 0,
     });
 
-    // Try queuing to BullMQ, with direct background fallback if Redis is unavailable
-    let bullJobId = null;
-    try {
-      bullJobId = await addJob(generationQueue, 'generate-website', {
-        projectId: projectId.toString(),
-        jobId: jobDoc._id.toString(),
-      });
-      jobDoc.bullJobId = bullJobId;
-      await jobDoc.save();
-    } catch (qErr) {
-      logger.warn('[generateWebsite] Redis queue unavailable; running generation in-process:', qErr.message);
-      // Run asynchronously without blocking response
-      setImmediate(() => {
-        executeWebsiteGeneration(projectId, jobDoc._id).catch((e) =>
-          logger.error('[generateWebsite] Direct execution failed:', e.message)
-        );
-      });
-    }
+    // Queue job via unified addJob (handles in-process queue automatically)
+    const jobId = await addJob(generationQueue, 'generate-website', {
+      projectId: projectId.toString(),
+      jobId: jobDoc._id.toString(),
+    });
+
+    jobDoc.bullJobId = jobId;
+    await jobDoc.save();
 
     return success(
       res,

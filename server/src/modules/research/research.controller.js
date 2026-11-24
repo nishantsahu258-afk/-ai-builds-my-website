@@ -36,7 +36,7 @@ export async function executeBusinessResearch(projectId, jobId = null) {
       await job.save();
     }
 
-    // 1. Perform search
+    // 1. Perform search (Tavily or Gemini grounding)
     const searchRes = await search(query);
 
     if (job) {
@@ -142,21 +142,13 @@ export async function startResearch(req, res, next) {
       progress: 0,
     });
 
-    try {
-      const bullJobId = await addJob(researchQueue, 'research-business', {
-        projectId: projectId.toString(),
-        jobId: jobDoc._id.toString(),
-      });
-      jobDoc.bullJobId = bullJobId;
-      await jobDoc.save();
-    } catch (qErr) {
-      logger.warn('[startResearch] Redis queue unavailable; executing in-process:', qErr.message);
-      setImmediate(() => {
-        executeBusinessResearch(projectId, jobDoc._id).catch((e) =>
-          logger.error('[startResearch] Direct execution failed:', e.message)
-        );
-      });
-    }
+    const jobId = await addJob(researchQueue, 'research-business', {
+      projectId: projectId.toString(),
+      jobId: jobDoc._id.toString(),
+    });
+
+    jobDoc.bullJobId = jobId;
+    await jobDoc.save();
 
     return success(res, { jobId: jobDoc._id }, 'Research initiated successfully', 202);
   } catch (err) {

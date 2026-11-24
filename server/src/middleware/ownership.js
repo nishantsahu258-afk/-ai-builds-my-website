@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import * as models from '../models/index.js';
 
 /**
  * Middleware factory that returns an ownership-check middleware for a given
@@ -15,18 +14,18 @@ const ownershipMiddleware = (modelName, paramName, attachKey) => async (req, res
   try {
     const id = req.params[paramName];
 
-    if (!id) {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(404).json({ success: false, message: 'Resource not found' });
     }
 
-    const Model = models[modelName] || mongoose.model(modelName);
+    const Model = mongoose.model(modelName);
     const doc = await Model.findById(id);
 
     if (!doc) {
       return res.status(404).json({ success: false, message: 'Resource not found' });
     }
 
-    if (doc.ownerId.toString() !== req.user.id.toString()) {
+    if (doc.ownerId.toString() !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Forbidden: you do not own this resource' });
     }
 

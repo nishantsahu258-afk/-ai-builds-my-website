@@ -36,63 +36,54 @@ export const listProjects = async (req, res, next) => {
  * Body: { businessName, city, state, country, category, description, address }
  */
 export const createProject = async (req, res, next) => {
-  let session = null;
-  if (mongoose.connection && mongoose.connection.readyState === 1) {
-    try {
-      session = await mongoose.startSession();
-      session.startTransaction();
-    } catch {
-      session = null;
-    }
-  }
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
   try {
     const { businessName, city, state, country, category, description, address } = req.body;
 
     // 1. Create the Business
-    const businessData = {
-      name: businessName,
-      city: city ?? null,
-      state: state ?? null,
-      country: country ?? 'India',
-      category: category ?? null,
-      description: description ?? null,
-      address: address ?? null,
-      ownerId: req.user.id,
-    };
-
-    const business = Array.isArray(await Business.create([businessData], session ? { session } : {}))
-      ? (await Business.create([businessData], session ? { session } : {}))[0]
-      : await Business.create(businessData);
+    const [business] = await Business.create(
+      [
+        {
+          name: businessName,
+          city: city ?? null,
+          state: state ?? null,
+          country: country ?? 'India',
+          category: category ?? null,
+          description: description ?? null,
+          address: address ?? null,
+          ownerId: req.user.id,
+        },
+      ],
+      { session },
+    );
 
     // 2. Create the Project — title defaults to the business name
-    const projectData = {
-      title: businessName,
-      businessId: business._id,
-      ownerId: req.user.id,
-      status: 'draft',
-    };
+    const [project] = await Project.create(
+      [
+        {
+          title: businessName,
+          businessId: business._id,
+          ownerId: req.user.id,
+          status: 'draft',
+        },
+      ],
+      { session },
+    );
 
-    const project = Array.isArray(await Project.create([projectData], session ? { session } : {}))
-      ? (await Project.create([projectData], session ? { session } : {}))[0]
-      : await Project.create(projectData);
-
-    if (session) {
-      await session.commitTransaction();
-      session.endSession();
-    }
+    await session.commitTransaction();
+    session.endSession();
 
     // Populate business on the returned document
     const populated = await Project.findById(project._id).populate('businessId').lean();
 
     logger.info(`[Projects] Created project ${project._id} for user ${req.user.id}`);
 
-    return success(res, { project: populated || project }, 'Project created successfully', 201);
+    return success(res, { project: populated }, 'Project created successfully', 201);
   } catch (err) {
-    if (session) {
-      await session.abortTransaction().catch(() => {});
-      session.endSession();
-    }
+    await session.abortTransaction();
+    session.endSession();
     next(err);
   }
 };
@@ -188,15 +179,8 @@ export const updateProject = async (req, res, next) => {
  * inside a single Mongoose session transaction.
  */
 export const deleteProject = async (req, res, next) => {
-  let session = null;
-  if (mongoose.connection && mongoose.connection.readyState === 1) {
-    try {
-      session = await mongoose.startSession();
-      session.startTransaction();
-    } catch {
-      session = null;
-    }
-  }
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
   try {
     const projectId = req.project._id;
@@ -205,36 +189,32 @@ export const deleteProject = async (req, res, next) => {
     await Project.findByIdAndUpdate(
       projectId,
       { $set: { deleted: true } },
-      session ? { session } : {},
+      { session },
     );
 
     // Cascade: soft-delete associated Sources
     await Source.updateMany(
       { projectId },
       { $set: { deleted: true } },
-      session ? { session } : {},
+      { session },
     );
 
     // Cascade: soft-delete associated Facts
     await Fact.updateMany(
       { projectId },
       { $set: { deleted: true } },
-      session ? { session } : {},
+      { session },
     );
 
-    if (session) {
-      await session.commitTransaction();
-      session.endSession();
-    }
+    await session.commitTransaction();
+    session.endSession();
 
     logger.info(`[Projects] Soft-deleted project ${projectId} by user ${req.user.id}`);
 
     return success(res, null, 'Project deleted successfully');
   } catch (err) {
-    if (session) {
-      await session.abortTransaction().catch(() => {});
-      session.endSession();
-    }
+    await session.abortTransaction();
+    session.endSession();
     next(err);
   }
 };

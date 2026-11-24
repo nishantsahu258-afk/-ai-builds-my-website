@@ -2,9 +2,9 @@
  * Search provider abstraction.
  *
  * Reads config.search.provider and delegates to the appropriate backend:
+ *   - 'tavily'  → Tavily REST API (Primary web search provider)
  *   - 'gemini'  → Gemini grounding search
- *   - 'tavily'  → Tavily REST API
- *   - anything else / missing key → returns error result without throwing
+ *   - anything else / missing key → returns clean empty result without throwing
  *
  * Export:
  *   search(query) → { success: boolean, results: [{ title, url, snippet, source }], error?: string }
@@ -17,78 +17,101 @@ import { searchWithGrounding } from '../gemini/gemini.client.js';
 const TAVILY_API_URL = 'https://api.tavily.com/search';
 
 // ---------------------------------------------------------------------------
-// Gemini provider
-// ---------------------------------------------------------------------------
-
-async function searchViaGemini(query) {
-  const { text, sources } = await searchWithGrounding(query);
-
-  // sources from grounding are { title, url }. Build normalised result list.
-  const results = sources.map((s) => ({
-    title: s.title,
-    url: s.url,
-    snippet: text.slice(0, 500), // grounding returns synthesised answer text
-    source: 'gemini',
-  }));
-
-  // If Gemini returns no discrete sources, still expose the synthesised text
-  if (results.length === 0 && text) {
-    results.push({
-      title: 'Gemini synthesised answer',
-      url: null,
-      snippet: text.slice(0, 1000),
-      source: 'gemini',
-    });
-  }
-
-  return { success: true, results };
-}
-
-// ---------------------------------------------------------------------------
-// Tavily provider
+// Tavily provider (Default per specification)
 // ---------------------------------------------------------------------------
 
 async function searchViaTavily(query) {
   const apiKey = config.search.tavilyApiKey;
 
-  if (!apiKey) {
+  if (!apiKey || apiKey === 'dummy-tavily-key') {
+    logger.warn('[Search:Tavily] TAVILY_API_KEY is not configured in server/.env');
     return {
       success: false,
       results: [],
-      error: 'Tavily API key not configured (TAVILY_API_KEY)',
+      error: 'Tavily API key not configured (set TAVILY_API_KEY in server/.env)',
     };
   }
 
-  const response = await fetch(TAVILY_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      query,
-      search_depth: 'basic',
-      include_answer: false,
-      max_results: 5,
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
+  try {
+    const response = await fetch(TAVILY_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        query,
+        search_depth: 'basic',
+        include_answer: false,
+        max_results: 5,
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Tavily HTTP ${response.status}: ${body.slice(0, 200)}`);
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      logger.warn(`[Search:Tavily] HTTP ${response.status}: ${body.slice(0, 200)}`);
+      return {
+        success: false,
+        results: [],
+        error: `Tavily returned HTTP ${response.status}`,
+      };
+    }
+
+    const data = await response.json();
+
+    const results = (data.results ?? []).map((r) => ({
+      title: r.title ?? '',
+      url: r.url ?? '',
+      snippet: r.content ?? r.snippet ?? '',
+      source: 'tavily',
+    }));
+
+    logger.info(`[Search:Tavily] Found ${results.length} results for query "${query}"`);
+    return { success: true, results };
+  } catch (err) {
+    logger.warn(`[Search:Tavily] Request error for query "${query}":`, err.message);
+    return {
+      success: false,
+      results: [],
+      error: `Tavily search error: ${err.message}`,
+    };
   }
+}
 
-  const data = await response.json();
+// ---------------------------------------------------------------------------
+// Gemini provider
+// ---------------------------------------------------------------------------
 
-  const results = (data.results ?? []).map((r) => ({
-    title: r.title ?? '',
-    url: r.url ?? '',
-    snippet: r.content ?? r.snippet ?? '',
-    source: 'tavily',
-  }));
+async function searchViaGemini(query) {
+  try {
+    const { text, sources } = await searchWithGrounding(query);
 
-  return { success: true, results };
+    const results = sources.map((s) => ({
+      title: s.title,
+      url: s.url,
+      snippet: text.slice(0, 500),
+      source: 'gemini',
+    }));
+
+    if (results.length === 0 && text) {
+      results.push({
+        title: 'Gemini synthesised answer',
+        url: null,
+        snippet: text.slice(0, 1000),
+        source: 'gemini',
+      });
+    }
+
+    return { success: true, results };
+  } catch (err) {
+    logger.warn(`[Search:Gemini] Grounding search error:`, err.message);
+    return {
+      success: false,
+      results: [],
+      error: err.message,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -102,25 +125,25 @@ async function searchViaTavily(query) {
  * @returns {Promise<{ success: boolean, results: Array<{ title: string, url: string, snippet: string, source: string }>, error?: string }>}
  */
 export async function search(query) {
-  const provider = (config.search.provider ?? 'none').toLowerCase();
+  const provider = (config.search.provider ?? 'tavily').toLowerCase();
 
   try {
-    if (provider === 'gemini') {
-      return await searchViaGemini(query);
-    }
-
     if (provider === 'tavily') {
       return await searchViaTavily(query);
     }
 
-    logger.warn(`[Search] Provider '${provider}' is not recognised or not configured`);
+    if (provider === 'gemini') {
+      return await searchViaGemini(query);
+    }
+
+    logger.warn(`[Search] Provider '${provider}' not configured`);
     return {
       success: false,
       results: [],
       error: 'Search provider not configured',
     };
   } catch (err) {
-    logger.error(`[Search] Provider '${provider}' error for query "${query}":`, err.message);
+    logger.error(`[Search] Unexpected search error for "${query}":`, err.message);
     return {
       success: false,
       results: [],

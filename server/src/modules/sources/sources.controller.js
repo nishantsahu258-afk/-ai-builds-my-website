@@ -62,17 +62,12 @@ export async function addFileSource(req, res, next) {
       extractionStatus: 'pending',
     });
 
-    // Try queuing BullMQ job; if Redis is down, update job status gracefully
-    let jobId = null;
-    try {
-      jobId = await addJob(sourceQueue, 'process-source', {
-        sourceId: source._id.toString(),
-        projectId: projectId.toString(),
-        type,
-      });
-    } catch (qErr) {
-      logger.warn('[addFileSource] Redis/BullMQ unavailable, job queued as offline:', qErr.message);
-    }
+    // Queue in-process or BullMQ processing
+    const jobId = await addJob(sourceQueue, 'process-source', {
+      sourceId: source._id.toString(),
+      projectId: projectId.toString(),
+      type,
+    });
 
     return success(
       res,
@@ -107,17 +102,13 @@ export async function addLinkSource(req, res, next) {
       extractionStatus: 'pending',
     });
 
-    let jobId = null;
-    try {
-      jobId = await addJob(sourceQueue, 'process-source', {
-        sourceId: source._id.toString(),
-        projectId: projectId.toString(),
-        type,
-        url,
-      });
-    } catch (qErr) {
-      logger.warn('[addLinkSource] Redis/BullMQ unavailable, queued as offline:', qErr.message);
-    }
+    // Queue in-process or BullMQ processing
+    const jobId = await addJob(sourceQueue, 'process-source', {
+      sourceId: source._id.toString(),
+      projectId: projectId.toString(),
+      type,
+      url,
+    });
 
     return success(
       res,
