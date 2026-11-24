@@ -2,8 +2,8 @@
  * Gemini AI client using official @google/genai SDK.
  *
  * Supported production models:
- *   - 'gemini-2.0-flash' (recommended default text and vision)
- *   - 'gemini-2.5-flash'
+ *   - 'gemini-3.8-flash' (current default model)
+ *   - 'gemini-2.0-flash'
  *   - 'gemini-1.5-flash'
  *
  * Exports:
@@ -43,15 +43,38 @@ function getText(response) {
 function formatGeminiError(err) {
   const msg = err.message || '';
   if (msg.includes('API_KEY_INVALID') || msg.includes('403') || msg.includes('unregistered project')) {
-    return 'Invalid or unconfigured Gemini API key. Please check GEMINI_API_KEY in server/.env.';
+    return 'Invalid or unconfigured Gemini API key. Please verify GEMINI_API_KEY in server/.env.';
+  }
+  if (msg.includes('503') || msg.includes('high demand') || msg.includes('temporarily unavailable')) {
+    return 'Google Gemini model is currently experiencing high demand (503). Retrying momentarily.';
   }
   if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-    return 'Gemini API rate limit or quota exceeded. Please wait or check your Gemini API plan.';
+    return 'Gemini API rate limit or quota exceeded (429). Please wait before retrying.';
   }
   if (msg.includes('NOT_FOUND') || msg.includes('404')) {
-    return `Configured Gemini model (${config.gemini.model}) is not available or deprecated. Try setting GEMINI_MODEL=gemini-2.0-flash.`;
+    return `Configured Gemini model (${config.gemini.model}) is not available. Please use GEMINI_MODEL=gemini-3.8-flash.`;
   }
   return msg;
+}
+
+async function retryWithBackoff(fn, retries = 2, delayMs = 1500) {
+  let lastError;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const msg = err.message || '';
+      const isRetryable = msg.includes('503') || msg.includes('429') || msg.includes('high demand');
+      if (i < retries && isRetryable) {
+        logger.warn(`[Gemini] Call hit ${err.code || 'temporary error'}. Retrying in ${delayMs * (i + 1)}ms...`);
+        await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+      } else {
+        break;
+      }
+    }
+  }
+  throw lastError;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,21 +88,22 @@ export async function generateText(prompt, systemInstruction = '') {
 
   const ai = getClient();
   try {
-    const params = {
-      model: config.gemini.model,
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    };
-
-    if (systemInstruction) {
-      params.systemInstruction = {
-        role: 'system',
-        parts: [{ text: systemInstruction }],
+    return await retryWithBackoff(async () => {
+      const params = {
+        model: config.gemini.model,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
       };
-    }
 
-    const response = await ai.models.generateContent(params);
-    const text = getText(response);
-    return text;
+      if (systemInstruction) {
+        params.systemInstruction = {
+          role: 'system',
+          parts: [{ text: systemInstruction }],
+        };
+      }
+
+      const response = await ai.models.generateContent(params);
+      return getText(response);
+    });
   } catch (err) {
     const userMsg = formatGeminiError(err);
     logger.error('[Gemini] generateText failed:', userMsg);
@@ -98,35 +122,36 @@ export async function generateJSON(prompt, systemInstruction = '', schema = null
 
   const ai = getClient();
   try {
-    const schemaHint = schema
-      ? `\n\nExpected JSON schema:\n${JSON.stringify(schema, null, 2)}`
-      : '';
+    return await retryWithBackoff(async () => {
+      const schemaHint = schema
+        ? `\n\nExpected JSON schema:\n${JSON.stringify(schema, null, 2)}`
+        : '';
 
-    const fullPrompt = `${prompt}${schemaHint}\n\nReturn ONLY valid JSON. Do not include markdown code fences or explanations.`;
+      const fullPrompt = `${prompt}${schemaHint}\n\nReturn ONLY valid JSON. Do not include markdown code fences or explanations.`;
 
-    const params = {
-      model: config.gemini.model,
-      contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-    };
-
-    if (systemInstruction) {
-      params.systemInstruction = {
-        role: 'system',
-        parts: [{ text: systemInstruction }],
+      const params = {
+        model: config.gemini.model,
+        contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
       };
-    }
 
-    const response = await ai.models.generateContent(params);
-    const raw = getText(response).trim();
+      if (systemInstruction) {
+        params.systemInstruction = {
+          role: 'system',
+          parts: [{ text: systemInstruction }],
+        };
+      }
 
-    // Strip markdown code fences if present
-    const stripped = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+      const response = await ai.models.generateContent(params);
+      const raw = getText(response).trim();
 
-    try {
-      return JSON.parse(stripped);
-    } catch (parseErr) {
-      throw new Error(`Failed to parse Gemini JSON output: ${parseErr.message}. Raw: ${stripped.slice(0, 200)}`);
-    }
+      const stripped = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+
+      try {
+        return JSON.parse(stripped);
+      } catch (parseErr) {
+        throw new Error(`Failed to parse Gemini JSON output: ${parseErr.message}. Raw: ${stripped.slice(0, 200)}`);
+      }
+    });
   } catch (err) {
     const userMsg = formatGeminiError(err);
     logger.error('[Gemini] generateJSON failed:', userMsg);
@@ -146,21 +171,23 @@ export async function analyzeImage(imageBase64, mimeType, prompt) {
 
   const ai = getClient();
   try {
-    const params = {
-      model: config.gemini.visionModel || config.gemini.model,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { inlineData: { data: imageBase64, mimeType } },
-            { text: prompt },
-          ],
-        },
-      ],
-    };
+    return await retryWithBackoff(async () => {
+      const params = {
+        model: config.gemini.visionModel || config.gemini.model,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { data: imageBase64, mimeType } },
+              { text: prompt },
+            ],
+          },
+        ],
+      };
 
-    const response = await ai.models.generateContent(params);
-    return getText(response);
+      const response = await ai.models.generateContent(params);
+      return getText(response);
+    });
   } catch (err) {
     const userMsg = formatGeminiError(err);
     logger.error('[Gemini] analyzeImage failed:', userMsg);
@@ -179,35 +206,37 @@ export async function searchWithGrounding(query) {
 
   const ai = getClient();
   try {
-    const params = {
-      model: config.gemini.model,
-      contents: [{ role: 'user', parts: [{ text: query }] }],
-      tools: [{ googleSearch: {} }],
-    };
+    return await retryWithBackoff(async () => {
+      const params = {
+        model: config.gemini.model,
+        contents: [{ role: 'user', parts: [{ text: query }] }],
+        tools: [{ googleSearch: {} }],
+      };
 
-    const response = await ai.models.generateContent(params);
-    const text = getText(response);
+      const response = await ai.models.generateContent(params);
+      const text = getText(response);
 
-    const sources = [];
-    const candidates = response.candidates ?? [];
+      const sources = [];
+      const candidates = response.candidates ?? [];
 
-    for (const candidate of candidates) {
-      const groundingMetadata = candidate.groundingMetadata;
-      if (!groundingMetadata) continue;
+      for (const candidate of candidates) {
+        const groundingMetadata = candidate.groundingMetadata;
+        if (!groundingMetadata) continue;
 
-      const chunks = groundingMetadata.groundingChunks ?? [];
-      for (const chunk of chunks) {
-        const web = chunk.web;
-        if (web?.uri) {
-          sources.push({
-            title: web.title ?? web.uri,
-            url: web.uri,
-          });
+        const chunks = groundingMetadata.groundingChunks ?? [];
+        for (const chunk of chunks) {
+          const web = chunk.web;
+          if (web?.uri) {
+            sources.push({
+              title: web.title ?? web.uri,
+              url: web.uri,
+            });
+          }
         }
       }
-    }
 
-    return { text, sources };
+      return { text, sources };
+    });
   } catch (err) {
     const userMsg = formatGeminiError(err);
     logger.error('[Gemini] searchWithGrounding failed:', userMsg);
