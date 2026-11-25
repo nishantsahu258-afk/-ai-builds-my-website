@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -26,8 +27,9 @@ app.use(cookieParser());
 // Rate limiting on all API routes
 app.use('/api', apiLimiter);
 
-// Serve uploaded files
-app.use('/uploads', express.static('uploads'));
+// Ensure upload directory exists at startup and serve from canonical config.storage.uploadDir
+fs.mkdirSync(config.storage.uploadDir, { recursive: true });
+app.use('/uploads', express.static(config.storage.uploadDir));
 
 // API Routes
 app.use('/api', routes);
