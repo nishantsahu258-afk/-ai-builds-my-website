@@ -84,6 +84,16 @@ async function searchViaTavily(query) {
 // ---------------------------------------------------------------------------
 
 async function searchViaGemini(query) {
+  const apiKey = config.gemini.apiKey;
+  if (!apiKey || apiKey === 'dummy-dev-key') {
+    logger.warn('[Search:Gemini] GEMINI_API_KEY is not configured');
+    return {
+      success: false,
+      results: [],
+      error: 'Gemini API key not configured (set GEMINI_API_KEY)',
+    };
+  }
+
   try {
     const { text, sources } = await searchWithGrounding(query);
 

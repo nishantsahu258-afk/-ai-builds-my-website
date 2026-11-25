@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { addJob, sourceQueue, generationQueue } from '../src/queue/queue.js';
 import { search } from '../src/integrations/search/search.service.js';
+import { config } from '../src/config/index.js';
 
 describe('5. In-Process Job Queue Engine (Zero Redis Dependency)', () => {
   test('dispatches job and returns in-process job ID without throwing', async () => {
@@ -25,11 +26,36 @@ describe('5. In-Process Job Queue Engine (Zero Redis Dependency)', () => {
   });
 });
 
-describe('6. Tavily Search Integration Graceful Handling', () => {
+describe('6. Tavily & Gemini Search Integration Graceful Handling', () => {
   test('handles unconfigured or missing Tavily key without crashing', async () => {
-    const res = await search('Sharma Electronics Durg');
-    assert.equal(res.success, false);
-    assert.ok(res.error);
-    assert.equal(Array.isArray(res.results), true);
+    const prevProvider = config.search.provider;
+    const prevKey = config.search.tavilyApiKey;
+    config.search.provider = 'tavily';
+    config.search.tavilyApiKey = '';
+    try {
+      const res = await search('Sharma Electronics Durg');
+      assert.equal(res.success, false);
+      assert.ok(res.error);
+      assert.equal(Array.isArray(res.results), true);
+    } finally {
+      config.search.provider = prevProvider;
+      config.search.tavilyApiKey = prevKey;
+    }
+  });
+
+  test('handles unconfigured or dummy Gemini key without crashing', async () => {
+    const prevProvider = config.search.provider;
+    const prevGeminiKey = config.gemini.apiKey;
+    config.search.provider = 'gemini';
+    config.gemini.apiKey = 'dummy-dev-key';
+    try {
+      const res = await search('Sharma Electronics Durg');
+      assert.equal(res.success, false);
+      assert.ok(res.error);
+      assert.equal(Array.isArray(res.results), true);
+    } finally {
+      config.search.provider = prevProvider;
+      config.gemini.apiKey = prevGeminiKey;
+    }
   });
 });
