@@ -1,14 +1,18 @@
-# Architecture Decisions
+# Architecture & Technology Decisions
 
-## 1. In-Process Job Queue (Default)
-- Background source extraction, research, and website generation run via an in-process queue (`server/src/queue/queue.js`) using `setImmediate`.
-- **Trade-off:** Zero Redis/Docker dependency for local development and staging, at the cost of jobs not surviving a process restart. Staging/production must run a **single backend instance**.
+## 1. Stack Deviation: React + Vite + Node.js/Express + MongoDB Atlas
+- **Original brief:** Laravel + MySQL.
+- **Implemented stack:** React + Vite (`client/`), Node.js 24 + Express (`server/`), and MongoDB Atlas (Mongoose).
+- **Rationale & Trade-offs:** Unified JavaScript/ESM across client and server, rapid JSON schema validation with Zod, and flexible document storage for multi-candidate `Fact` provenance and nested `Website` section schemas.
 
-## 2. Local Filesystem Storage with Render Persistent Disk
-- Uploaded PDFs and images are stored on disk under `config.storage.uploadDir` (resolved relative to `server/` in development, and `/var/data/uploads` on Render Persistent Disk in production).
-- `storageKey` is stored as `<projectId>/<filename>` and resolved safely with path-traversal protection.
+## 2. In-Process Job Queue (Single-Instance Requirement)
+- **Decision:** Background tasks (PDF/image extraction, web research, website generation) run in-process via `setImmediate` in `server/src/queue/queue.js`.
+- **Trade-off:** Eliminates Redis and Docker dependencies for local development and staging, but **in-flight jobs do not survive process restarts** and the backend **must run as a single instance** on Render.
 
-## 3. Fact-Safe Generation & Publishing Gate
-- Normal generation uses only owner-confirmed facts from relevant, non-excluded sources.
-- Manual-only generation (`manualOnly=true`) uses a deterministic builder from confirmed `extractionMethod === 'manual'` candidates only, without calling Gemini to invent marketing copy.
-- Publishing validates enabled sections against unsupported promotional claims before creating a `WebsiteVersion` snapshot.
+## 3. Persistent Local Filesystem Storage
+- **Decision:** Uploaded PDFs and images are stored on disk under `config.storage.uploadDir` (resolved relative to `server/` locally, and `/var/data/uploads` on Render Persistent Disk in production).
+- **Trade-off:** Avoids external object-storage setup while persisting uploads across deploys when backed by Render's `/var/data` disk mount. `storage.service.js` normalizes Windows/POSIX paths and blocks path traversal.
+
+## 4. Deterministic Manual-Only Generation
+- **Decision:** When `manualOnly=true`, `executeWebsiteGeneration` bypasses Gemini copywriting and builds sections deterministically from confirmed `extractionMethod === 'manual'` candidates only, leaving missing fields as editable placeholders.
+- **Trade-off:** Guarantees zero hallucinated marketing claims or external source leakage in manual-only mode.
