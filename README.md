@@ -67,6 +67,15 @@ npm run dev
 | `COOKIE_SECURE` | `true` in production HTTPS, `false` locally |
 | `COOKIE_SAME_SITE` | `none` for cross-origin production, `lax` locally |
 
+## Documentation & Configuration Links
+
+- **Environment Template:** [.env.example](.env.example)
+- **Architecture Decisions:** [DECISIONS.md](DECISIONS.md)
+- **System Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **API Reference:** [docs/API.md](docs/API.md)
+- **Deployment Guide:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- **Demo Script:** [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
+
 ## Testing
 
 - **Backend tests:** `npm test --prefix server` — **35 passed, 0 failed** across **10 suites** (SSRF protection, auth/JWT, Zod validation, prompt injection defense, source exclusion, Golden Rule & manual-only isolation, in-process queue, Tavily fallback, rate limiters, storage path resolution).
