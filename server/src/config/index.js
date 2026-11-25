@@ -1,4 +1,13 @@
 import 'dotenv/config';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __configDir = path.dirname(fileURLToPath(import.meta.url));
+const serverRootDir = path.resolve(__configDir, '../..');
+const rawUploadDir = process.env.UPLOAD_DIR || 'uploads';
+const resolvedUploadDir = path.isAbsolute(rawUploadDir)
+  ? rawUploadDir
+  : path.resolve(serverRootDir, rawUploadDir);
 
 // Safe development defaults for immediate local preview
 const defaultJwtSecret = 'dev-jwt-secret-key-at-least-32-characters-long';
@@ -50,7 +59,7 @@ export const config = {
 
   storage: {
     provider: process.env.STORAGE_PROVIDER || 'local',
-    uploadDir: process.env.UPLOAD_DIR || 'uploads',
+    uploadDir: resolvedUploadDir,
     cloudinary: {
       cloudName: process.env.CLOUDINARY_CLOUD_NAME,
       apiKey: process.env.CLOUDINARY_API_KEY,

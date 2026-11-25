@@ -97,6 +97,14 @@ const websiteSchema = new Schema(
       ref: 'WebsiteVersion',
       default: null,
     },
+    manualOnly: {
+      type: Boolean,
+      default: false,
+    },
+    approvedFactsSnapshot: {
+      type: Schema.Types.Mixed,
+      default: [],
+    },
     lastGeneratedAt: {
       type: Date,
       default: null,

@@ -1,11 +1,11 @@
-import jwt from 'jsonwebtoken';
-import mongoose from 'mongoose';
-import { config } from '../../config/index.js';
-import { success } from '../../utils/response.js';
-import { logger } from '../../utils/logger.js';
+import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
+import { config } from "../../config/index.js";
+import { success } from "../../utils/response.js";
+import { logger } from "../../utils/logger.js";
 
 /** @returns {import('mongoose').Model} */
-const getUserModel = () => mongoose.model('User');
+const getUserModel = () => mongoose.model("User");
 
 /**
  * Sign a JWT for the given user payload.
@@ -21,7 +21,7 @@ const signToken = (payload) =>
  * @param {string} token
  */
 const setCookie = (res, token) => {
-  res.cookie('token', token, {
+  res.cookie("token", token, {
     httpOnly: config.cookie.httpOnly,
     secure: config.cookie.secure,
     sameSite: config.cookie.sameSite,
@@ -40,11 +40,11 @@ export const register = async (req, res, next) => {
     if (existing) {
       return res.status(409).json({
         success: false,
-        message: 'An account with that email already exists',
+        message: "An account with that email already exists",
       });
     }
 
-    const user = await User.create({ name, email, password });
+    const user = await User.create({ name, email, passwordHash: password });
 
     const token = signToken({ id: user._id.toString(), email: user.email });
     setCookie(res, token);
@@ -54,6 +54,7 @@ export const register = async (req, res, next) => {
     return success(
       res,
       {
+        token,
         user: {
           id: user._id,
           name: user.name,
@@ -61,7 +62,7 @@ export const register = async (req, res, next) => {
           createdAt: user.createdAt,
         },
       },
-      'Account created successfully',
+      "Account created successfully",
       201,
     );
   } catch (err) {
@@ -77,11 +78,11 @@ export const login = async (req, res, next) => {
     const User = getUserModel();
 
     // Select passwordHash explicitly since it's likely hidden by default
-    const user = await User.findOne({ email }).select('+passwordHash');
+    const user = await User.findOne({ email }).select("+passwordHash");
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid email or password',
+        message: "Invalid email or password",
       });
     }
 
@@ -89,7 +90,7 @@ export const login = async (req, res, next) => {
     if (!passwordMatches) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid email or password',
+        message: "Invalid email or password",
       });
     }
 
@@ -108,7 +109,7 @@ export const login = async (req, res, next) => {
           createdAt: user.createdAt,
         },
       },
-      'Logged in successfully',
+      "Logged in successfully",
     );
   } catch (err) {
     next(err);
@@ -119,12 +120,12 @@ export const login = async (req, res, next) => {
 
 export const logout = (req, res, next) => {
   try {
-    res.clearCookie('token', {
+    res.clearCookie("token", {
       httpOnly: config.cookie.httpOnly,
       secure: config.cookie.secure,
       sameSite: config.cookie.sameSite,
     });
-    return success(res, null, 'Logged out successfully');
+    return success(res, null, "Logged out successfully");
   } catch (err) {
     next(err);
   }
@@ -135,12 +136,12 @@ export const logout = (req, res, next) => {
 export const getMe = async (req, res, next) => {
   try {
     const User = getUserModel();
-    const user = await User.findById(req.user.id).select('-passwordHash');
+    const user = await User.findById(req.user.id).select("-passwordHash");
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found',
+        message: "User not found",
       });
     }
 
@@ -155,7 +156,7 @@ export const getMe = async (req, res, next) => {
           updatedAt: user.updatedAt,
         },
       },
-      'User retrieved successfully',
+      "User retrieved successfully",
     );
   } catch (err) {
     next(err);

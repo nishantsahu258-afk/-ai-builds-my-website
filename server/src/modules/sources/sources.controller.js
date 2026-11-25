@@ -1,4 +1,5 @@
 import path from 'path';
+import { config } from '../../config/index.js';
 import { Source, Project, GenerationJob } from '../../models/index.js';
 import { isSafeUrl } from '../../utils/ssrfProtection.js';
 import { success, error } from '../../utils/response.js';
@@ -50,7 +51,19 @@ export async function addFileSource(req, res, next) {
     }
 
     const type = inferTypeFromMime(file.mimetype);
-    const storageKey = path.relative(process.cwd(), file.path).replace(/\\/g, '/');
+    // storageKey must be relative to the uploads baseDir (config.storage.uploadDir) so that
+    // storage.getFilePath(key) resolves to the correct absolute path without double-prefix.
+    // Multer writes file.path as "uploads/<projectId>/<uuid>.pdf" (relative) or absolute.
+    // Store only "<projectId>/<uuid>.pdf" so getFilePath() joins baseDir + key correctly.
+    const absFilePath = path.resolve(file.path);
+    const absUploadDir = path.resolve(config.storage.uploadDir);
+    let storageKey;
+    if (absFilePath.startsWith(absUploadDir + path.sep) || absFilePath.startsWith(absUploadDir + '/')) {
+      storageKey = path.relative(absUploadDir, absFilePath).replace(/\\/g, '/');
+    } else {
+      const rel = path.relative(process.cwd(), absFilePath).replace(/\\/g, '/');
+      storageKey = rel.replace(/^uploads\//, '');
+    }
 
     const source = await Source.create({
       projectId,
@@ -129,6 +142,57 @@ export async function listSources(req, res, next) {
     const projectId = req.project._id;
     const sources = await Source.find({ projectId }).sort({ createdAt: -1 }).lean();
     return success(res, { sources }, 'Sources retrieved successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /sources/:sourceId/exclude
+ */
+export async function excludeSource(req, res, next) {
+  try {
+    const { sourceId } = req.params;
+    const source = await Source.findById(sourceId);
+    if (!source) {
+      return error(res, 'Source not found', 404);
+    }
+    // Verify ownership via project
+    const project = await Project.findOne({ _id: source.projectId, ownerId: req.user.id });
+    if (!project) {
+      return error(res, 'Forbidden: you do not own this resource', 403);
+    }
+    source.excluded = true;
+    await source.save();
+    return success(res, source, 'Source excluded successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /sources/:sourceId/retry
+ */
+export async function retrySource(req, res, next) {
+  try {
+    const { sourceId } = req.params;
+    const source = await Source.findById(sourceId);
+    if (!source) {
+      return error(res, 'Source not found', 404);
+    }
+    const project = await Project.findOne({ _id: source.projectId, ownerId: req.user.id });
+    if (!project) {
+      return error(res, 'Forbidden: you do not own this resource', 403);
+    }
+    source.extractionStatus = 'pending';
+    source.errorMessage = null;
+    await source.save();
+
+    await addJob(sourceQueue, 'process-source', {
+      sourceId: source._id.toString(),
+    });
+
+    return success(res, source, 'Source re-queued for extraction');
   } catch (err) {
     next(err);
   }

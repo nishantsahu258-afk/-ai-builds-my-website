@@ -88,6 +88,25 @@ const factSchema = new Schema(
 // Compound unique index — one fact key per project
 factSchema.index({ projectId: 1, key: 1 }, { unique: true });
 
+// ---------------------------------------------------------------------------
+// Virtuals
+// ---------------------------------------------------------------------------
+// Provide a human‑readable label describing where the fact came from. This is
+// used by the verification UI to show "Manual Input / Business Profile",
+// "Uploaded File", or "Public Source" without having to infer it on the client.
+factSchema.virtual('sourceLabel').get(function () {
+  const method = this.candidates?.[0]?.extractionMethod;
+  if (!method) return 'Unknown';
+  if (method === 'manual') return 'Manual Input / Business Profile';
+  if (['pdf', 'image'].includes(method)) return 'Uploaded File';
+  if (['website', 'social', 'google_listing'].includes(method)) return 'Public Source';
+  return method;
+});
+
+// Ensure virtuals are included when converting to plain objects or JSON.
+factSchema.set('toObject', { virtuals: true });
+factSchema.set('toJSON', { virtuals: true });
+
 const Fact = model('Fact', factSchema);
 
 export default Fact;

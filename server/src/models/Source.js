@@ -65,6 +65,20 @@ const sourceSchema = new Schema(
       type: String,
       default: null,
     },
+    // New fields for relevance & exclusion
+    relevance: {
+      type: String,
+      enum: { values: ['relevant', 'needs_review', 'mismatched', 'failed'], message: 'Invalid relevance' },
+      default: 'needs_review',
+    },
+    relevanceReason: {
+      type: String,
+      default: null,
+    },
+    excluded: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

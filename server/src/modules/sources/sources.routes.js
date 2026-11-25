@@ -10,6 +10,8 @@ import {
   addLinkSource,
   listSources,
   deleteSource,
+  excludeSource,
+  retrySource,
 } from './sources.controller.js';
 
 const router = Router();
@@ -36,6 +38,18 @@ router.get(
   authenticate,
   checkProjectOwnership,
   listSources
+);
+
+router.post(
+  '/sources/:sourceId/exclude',
+  authenticate,
+  excludeSource
+);
+
+router.post(
+  '/sources/:sourceId/retry',
+  authenticate,
+  retrySource
 );
 
 router.delete(

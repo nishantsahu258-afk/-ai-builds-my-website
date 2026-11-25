@@ -44,7 +44,9 @@ async function runInProcessJob(jobType, data, jobDocId = null) {
         await executeBusinessResearch(data.projectId, jobDocId || data.jobId);
       } else if (jobType === 'generate-website') {
         const { executeWebsiteGeneration } = await import('../modules/generation/generation.controller.js');
-        await executeWebsiteGeneration(data.projectId, jobDocId || data.jobId);
+        await executeWebsiteGeneration(data.projectId, jobDocId || data.jobId, {
+          manualOnly: Boolean(data.manualOnly),
+        });
       } else {
         logger.warn(`[InProcessQueue] Unrecognized job type: ${jobType}`);
       }

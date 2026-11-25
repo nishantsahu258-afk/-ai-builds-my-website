@@ -13,24 +13,37 @@ export default function Sidebar() {
     navigate('/login');
   };
 
-  const getInitials = (name) => {
-    if (!name) return 'U';
-    const parts = name.trim().split(' ');
+  const getInitials = (name, email) => {
+    const source = name || email || 'U';
+    const parts = source.trim().split(' ');
     if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-    return name.slice(0, 2).toUpperCase();
+    return source.slice(0, 2).toUpperCase();
   };
 
-  const navItems = [
+  const workspaceItems = [
     { label: 'Overview', to: '/', icon: LayoutDashboard },
     { label: 'Websites', to: '/projects', icon: Globe },
     { label: 'Sources', to: '/sources', icon: FileText },
     { label: 'Settings', to: '/settings', icon: Settings },
   ];
 
+  const resourceItems = [
+    { label: 'Help Center', to: '/help', icon: HelpCircle },
+    { label: 'Documentation', to: '/docs', icon: BookOpen },
+  ];
+
+  const isRouteActive = (to) => {
+    if (to === '/') return location.pathname === '/';
+    return location.pathname === to || location.pathname.startsWith(`${to}/`);
+  };
+
   return (
     <aside className="w-64 bg-sidebar text-slate-300 flex flex-col min-h-screen border-r border-slate-800 select-none">
       {/* Brand Header */}
-      <div className="p-6 flex items-center gap-3">
+      <div
+        onClick={() => navigate('/')}
+        className="p-6 flex items-center gap-3 cursor-pointer"
+      >
         <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-white font-bold text-lg shadow-md">
           A
         </div>
@@ -47,12 +60,9 @@ export default function Sidebar() {
             Workspace
           </div>
           <nav className="flex flex-col gap-1">
-            {navItems.map((item) => {
+            {workspaceItems.map((item) => {
               const Icon = item.icon;
-              const isActive =
-                item.to === '/'
-                  ? location.pathname === '/'
-                  : location.pathname.startsWith(item.to);
+              const isActive = isRouteActive(item.to);
 
               return (
                 <NavLink
@@ -77,26 +87,25 @@ export default function Sidebar() {
             Resources
           </div>
           <nav className="flex flex-col gap-1">
-            <a
-              href="https://ai-builds-my-website.docs"
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => e.preventDefault()}
-              className="flex items-center gap-3 px-3 py-2 text-sm text-slate-400 hover:text-slate-200 hover:bg-slate-800/30 rounded-xl transition"
-            >
-              <HelpCircle className="w-4 h-4 text-slate-400" />
-              Help center
-            </a>
-            <a
-              href="https://ai-builds-my-website.docs"
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => e.preventDefault()}
-              className="flex items-center gap-3 px-3 py-2 text-sm text-slate-400 hover:text-slate-200 hover:bg-slate-800/30 rounded-xl transition"
-            >
-              <BookOpen className="w-4 h-4 text-slate-400" />
-              Documentation
-            </a>
+            {resourceItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = isRouteActive(item.to);
+
+              return (
+                <NavLink
+                  key={item.label}
+                  to={item.to}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive
+                      ? 'bg-slate-800/80 text-white shadow-sm ring-1 ring-slate-700/50'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-primary' : 'text-slate-400'}`} />
+                  {item.label}
+                </NavLink>
+              );
+            })}
           </nav>
         </div>
       </div>
@@ -104,19 +113,23 @@ export default function Sidebar() {
       {/* User Footer */}
       <div className="p-4 border-t border-slate-800/80">
         <div className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-800/50 transition">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center border border-slate-600">
-              {getInitials(user?.name || 'Alex Smith')}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-full bg-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center border border-slate-600 flex-shrink-0">
+              {getInitials(user?.name, user?.email)}
             </div>
-            <div className="leading-tight">
-              <div className="text-white text-xs font-semibold">{user?.name || 'Alex Smith'}</div>
-              <div className="text-[11px] text-slate-400">Free workspace</div>
+            <div className="leading-tight min-w-0">
+              <div className="text-white text-xs font-semibold truncate">
+                {user?.name || user?.email || 'Account'}
+              </div>
+              <div className="text-[11px] text-slate-400 truncate">
+                {user?.email || 'Authenticated'}
+              </div>
             </div>
           </div>
           <button
             onClick={handleLogout}
             title="Log out"
-            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition"
+            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition flex-shrink-0"
           >
             <LogOut className="w-4 h-4" />
           </button>

@@ -1,9 +1,46 @@
 import slugify from 'slugify';
 import { v4 as uuidv4 } from 'uuid';
-import { Website, WebsiteVersion, Project, Business } from '../../models/index.js';
+import { Website, WebsiteVersion, Project, Business, Fact, Source } from '../../models/index.js';
 import { config } from '../../config/index.js';
 import { success, error } from '../../utils/response.js';
 import { logger } from '../../utils/logger.js';
+
+const UNSUPPORTED_CLAIM_PATTERNS = [
+  /confirmed\s*&\s*verified\s*business/i,
+  /all\s+verified\s+information\s+backed\s+by\s+sources/i,
+  /your\s+premier\b/i,
+  /proudly\s+serving\s+the\s+community/i,
+  /enjoy\s+quality\s+food\s+and\s+beverages/i,
+  /\bquality\b.*\bexperiences?\b/i,
+  /\bquality\s+food\b/i,
+  /\bgreat\s+atmosphere\b/i,
+  /\bis\s+a\s+dedicated\b/i,
+  /\bworld[- ]class\b/i,
+  /\bbest[- ]in[- ]class\b/i,
+  /\bindustry[- ]leading\b/i,
+];
+
+/**
+ * Inspect enabled website sections for unsupported or unverified boilerplate claims.
+ */
+export function findUnsupportedClaims(enabledSections, confirmedFacts = []) {
+  const confirmedText = confirmedFacts
+    .map((f) => (Array.isArray(f.selectedValue) ? f.selectedValue.join(' ') : String(f.selectedValue || '')))
+    .join(' ')
+    .toLowerCase();
+
+  const findings = [];
+  for (const sec of enabledSections) {
+    const contentStr = JSON.stringify(sec.content || {});
+    for (const pattern of UNSUPPORTED_CLAIM_PATTERNS) {
+      const match = contentStr.match(pattern);
+      if (match && !confirmedText.includes(match[0].toLowerCase())) {
+        findings.push(`Unsupported claim in "${sec.type}" section: "${match[0]}"`);
+      }
+    }
+  }
+  return findings;
+}
 
 /**
  * POST /websites/:id/publish
@@ -17,6 +54,46 @@ export async function publishWebsite(req, res, next) {
     const enabledSections = website.sections.filter((s) => s.enabled);
     if (enabledSections.length === 0) {
       return error(res, 'Cannot publish website without any enabled sections', 400);
+    }
+
+    // Publishing Guard 1: Verify confirmed facts and no unresolved conflicts/unverified facts
+    const [confirmedFacts, conflictCount, unverifiedCount, blockingSources] = await Promise.all([
+      Fact.find({ projectId: website.projectId, status: 'confirmed' }).lean(),
+      Fact.countDocuments({ projectId: website.projectId, status: 'conflict' }),
+      website.manualOnly ? Promise.resolve(0) : Fact.countDocuments({ projectId: website.projectId, status: 'unverified' }),
+      website.manualOnly
+        ? Promise.resolve([])
+        : Source.find({
+            projectId: website.projectId,
+            excluded: false,
+            $or: [
+              { relevance: { $ne: 'relevant' } },
+              { extractionStatus: { $in: ['pending', 'processing', 'failed'] } },
+            ],
+          }).lean(),
+    ]);
+
+    if (confirmedFacts.length === 0) {
+      return error(res, 'Cannot publish: No confirmed business facts exist for this project.', 400);
+    }
+    if (conflictCount > 0) {
+      return error(res, `Cannot publish: ${conflictCount} unresolved conflicting facts remain.`, 400);
+    }
+    if (unverifiedCount > 0) {
+      return error(res, `Cannot publish: ${unverifiedCount} unverified facts must be confirmed or rejected before publishing.`, 400);
+    }
+    if (blockingSources.length > 0) {
+      return error(res, 'Cannot publish: Active sources are failed, pending, or not relevant. Retry, exclude, or regenerate in manual-only mode.', 400);
+    }
+
+    // Publishing Guard 2: Inspect generated sections for unsupported boilerplate claims
+    const unsupportedClaims = findUnsupportedClaims(enabledSections, confirmedFacts);
+    if (unsupportedClaims.length > 0) {
+      return error(
+        res,
+        `Cannot publish: Website contains unsupported claims (${unsupportedClaims[0]}). Edit the section before publishing.`,
+        400
+      );
     }
 
     // Ensure slug exists
@@ -137,6 +214,14 @@ export async function getPublicSite(req, res, next) {
 
     const project = await Project.findById(website.projectId).populate('businessId').lean();
 
+    const [confirmedCount, conflictCount, unverifiedCount] = await Promise.all([
+      Fact.countDocuments({ projectId: website.projectId, status: 'confirmed' }),
+      Fact.countDocuments({ projectId: website.projectId, status: 'conflict' }),
+      website.manualOnly ? Promise.resolve(0) : Fact.countDocuments({ projectId: website.projectId, status: 'unverified' }),
+    ]);
+
+    const hasConfirmedProvenance = confirmedCount > 0 && conflictCount === 0 && unverifiedCount === 0;
+
     // Cache header for performance
     res.setHeader('Cache-Control', 'public, max-age=120, s-maxage=300');
 
@@ -149,6 +234,8 @@ export async function getPublicSite(req, res, next) {
         city: project?.businessId?.city || null,
         theme,
         sections: enabledSections,
+        manualOnly: Boolean(website.manualOnly),
+        hasConfirmedProvenance,
         publishedAt: website.publishedAt,
       },
       'Public site loaded successfully'

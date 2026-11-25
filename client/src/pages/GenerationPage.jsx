@@ -3,18 +3,20 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock, AlertCircle, ArrowRight, Store, Sparkles, RefreshCw } from 'lucide-react';
 import Layout from '../components/common/Layout.jsx';
 import StatusBadge from '../components/common/StatusBadge.jsx';
-import { generationService, projectsService } from '../services/index.js';
+import { generationService, projectsService, sourcesService } from '../services/index.js';
 import { useToast } from '../context/ToastContext.jsx';
 
 export default function GenerationPage() {
   const { id: projectId } = useParams();
   const [searchParams] = useSearchParams();
   const jobId = searchParams.get('jobId');
+  const isManualOnly = searchParams.get('manualOnly') === 'true';
   const navigate = useNavigate();
   const { addToast } = useToast();
 
   const [project, setProject] = useState(null);
   const [job, setJob] = useState(null);
+  const [sources, setSources] = useState([]);
   const [isCompleted, setIsCompleted] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
@@ -36,6 +38,10 @@ export default function GenerationPage() {
       const proj = pRes?.data?.project;
       setProject(proj);
 
+      // fetch sources for dynamic steps
+      const sRes = await sourcesService.list(projectId);
+      setSources(sRes?.data?.sources || []);
+
       if (proj?.status === 'generated' || proj?.status === 'published') {
         setIsCompleted(true);
       }
@@ -55,30 +61,54 @@ export default function GenerationPage() {
     return () => clearInterval(interval);
   }, [projectId, jobId, isCompleted, errorMsg]);
 
-  const handleRetry = async () => {
+  const handleRetry = async (manualOnly = false) => {
     setErrorMsg(null);
+    setIsCompleted(false);
     try {
-      const res = await generationService.generate(projectId);
+      const res = await generationService.generate(projectId, { manualOnly });
       const newJobId = res?.data?.jobId;
-      addToast({ type: 'info', message: 'Retrying generation...' });
-      navigate(`/projects/${projectId}/generate?jobId=${newJobId}`, { replace: true });
+      addToast({
+        type: 'info',
+        message: manualOnly ? 'Starting manual-only generation...' : 'Retrying generation...',
+      });
+      navigate(`/projects/${projectId}/generate?jobId=${newJobId}${manualOnly ? '&manualOnly=true' : ''}`, { replace: true });
     } catch (err) {
       addToast({ type: 'error', message: err.message || 'Retry failed' });
     }
   };
 
+  const handleRetrySource = async (sourceId) => {
+    try {
+      await sourcesService.retry(sourceId);
+      addToast({ type: 'info', message: 'Source re-queued for extraction' });
+      pollJobStatus();
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Could not retry source' });
+    }
+  };
+
+  const failedSources = sources.filter(
+    (s) => !s.excluded && (s.extractionStatus === 'failed' || s.relevance === 'mismatched')
+  );
+
   const steps = [
     { title: 'Business details verified', state: 'completed' },
-    { title: 'Reading uploaded files', state: 'completed' },
-    { title: 'Researching public sources', state: 'completed' },
-    {
-      title: 'Generating website sections',
-      state: isCompleted ? 'completed' : errorMsg ? 'failed' : 'in_progress',
-    },
-    {
-      title: 'Validating and saving',
-      state: isCompleted ? 'completed' : 'queued',
-    },
+    { title: 'Reading uploaded files', state: (() => {
+        const fileSources = sources.filter((s) => ['pdf', 'image'].includes(s.type) && !s.excluded);
+        if (fileSources.length === 0) return 'skipped';
+        if (fileSources.some((s) => s.extractionStatus === 'failed' || s.relevance === 'mismatched')) return 'failed';
+        if (fileSources.some((s) => s.extractionStatus === 'processing' || s.extractionStatus === 'pending')) return 'in_progress';
+        return 'completed';
+      })() },
+    { title: 'Researching public sources', state: (() => {
+        const researchSources = sources.filter((s) => ['website', 'social', 'google_listing'].includes(s.type) && !s.excluded);
+        if (researchSources.length === 0) return 'skipped';
+        if (researchSources.some((s) => s.extractionStatus === 'failed' || s.relevance === 'mismatched')) return 'failed';
+        if (researchSources.some((s) => s.extractionStatus === 'processing' || s.extractionStatus === 'pending')) return 'in_progress';
+        return 'completed';
+      })() },
+    { title: 'Generating website sections', state: errorMsg ? 'failed' : isCompleted ? 'completed' : 'in_progress' },
+    { title: 'Validating and saving', state: errorMsg ? 'failed' : isCompleted ? 'completed' : 'queued' },
   ];
 
   return (
@@ -132,6 +162,7 @@ export default function GenerationPage() {
                 const isStepCompleted = st.state === 'completed';
                 const isStepInProgress = st.state === 'in_progress';
                 const isStepFailed = st.state === 'failed';
+                const isStepSkipped = st.state === 'skipped';
 
                 return (
                   <div key={i} className="flex items-start gap-3">
@@ -151,7 +182,7 @@ export default function GenerationPage() {
                           <AlertCircle className="w-3.5 h-3.5" />
                         </div>
                       )}
-                      {st.state === 'queued' && (
+                      {(st.state === 'queued' || isStepSkipped) && (
                         <div className="w-5 h-5 rounded-full border border-slate-300 bg-white" />
                       )}
                     </div>
@@ -174,6 +205,8 @@ export default function GenerationPage() {
                           ? 'In progress'
                           : isStepFailed
                           ? 'Failed'
+                          : isStepSkipped
+                          ? 'Skipped'
                           : 'Queued'}
                       </div>
                     </div>
@@ -182,16 +215,62 @@ export default function GenerationPage() {
               })}
             </div>
 
+            {failedSources.length > 0 && (
+              <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 mb-4">
+                <div className="font-bold mb-1.5">Source issues detected:</div>
+                <ul className="space-y-2">
+                  {failedSources.map((src) => (
+                    <li key={src._id} className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">
+                          {src.originalFileName || src.url || src.type}
+                        </div>
+                        <div className="text-[11px] text-amber-800">
+                          {src.errorMessage || src.relevanceReason || 'Source failed or mismatched'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRetrySource(src._id)}
+                        className="text-[11px] font-semibold text-primary hover:underline flex-shrink-0"
+                      >
+                        Retry
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {!isManualOnly && (
+                  <button
+                    type="button"
+                    onClick={() => handleRetry(true)}
+                    className="mt-3 w-full py-2 rounded-lg border border-amber-300 bg-white text-amber-900 font-semibold hover:bg-amber-100 transition"
+                  >
+                    Generate with Manual Facts Only →
+                  </button>
+                )}
+              </div>
+            )}
+
             {errorMsg && (
               <div className="p-4 bg-red-50 rounded-xl border border-red-200 text-xs text-red-700 mb-4">
                 <div className="font-bold mb-1">Generation paused:</div>
                 <div>{errorMsg}</div>
-                <button
-                  onClick={handleRetry}
-                  className="mt-3 px-4 py-1.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition"
-                >
-                  Retry Generation
-                </button>
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => handleRetry(isManualOnly)}
+                    className="px-4 py-1.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition"
+                  >
+                    Retry Generation
+                  </button>
+                  {!isManualOnly && (
+                    <button
+                      onClick={() => handleRetry(true)}
+                      className="px-4 py-1.5 rounded-lg border border-red-300 bg-white text-red-700 font-semibold hover:bg-red-50 transition"
+                    >
+                      Use Manual Facts Only
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>

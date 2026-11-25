@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, AlertTriangle, FileText, Globe, RefreshCw, ArrowRight, Plus, MapPin } from 'lucide-react';
 import Layout from '../components/common/Layout.jsx';
@@ -19,6 +19,7 @@ export default function VerificationPage() {
   const [manualValue, setManualValue] = useState('');
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const generationLockRef = useRef(false);
 
   // Manual fact addition
   const [showAddFact, setShowAddFact] = useState(false);
@@ -60,7 +61,23 @@ export default function VerificationPage() {
   }, [projectId]);
 
   const conflicts = facts.filter((f) => f.status === 'conflict');
-  const confirmedCount = facts.filter((f) => f.status === 'confirmed').length;
+  const unverifiedFacts = facts.filter((f) => f.status === 'unverified');
+  const confirmedFacts = facts.filter((f) => f.status === 'confirmed');
+  const confirmedCount = confirmedFacts.length;
+  const manualConfirmedCount = confirmedFacts.filter((f) =>
+    f.candidates?.some((c) => c.extractionMethod === 'manual')
+  ).length;
+  const blockingSources = sources.filter(
+    (s) =>
+      !s.excluded &&
+      (s.relevance !== 'relevant' || ['pending', 'processing', 'failed'].includes(s.extractionStatus))
+  );
+  const allVerifiedAndReady =
+    facts.length > 0 &&
+    confirmedCount > 0 &&
+    conflicts.length === 0 &&
+    unverifiedFacts.length === 0 &&
+    blockingSources.length === 0;
 
   const handleConfirmConflict = async () => {
     if (!selectedConflictFact) return;
@@ -101,6 +118,36 @@ export default function VerificationPage() {
     }
   };
 
+  const handleDirectReject = async (factId) => {
+    try {
+      await factsService.reject(factId);
+      addToast({ type: 'info', message: 'Fact rejected' });
+      await loadData();
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Rejection failed' });
+    }
+  };
+
+  const handleRetrySource = async (sourceId) => {
+    try {
+      await sourcesService.retry(sourceId);
+      addToast({ type: 'info', message: 'Source re-queued for extraction' });
+      await loadData();
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Could not retry source' });
+    }
+  };
+
+  const handleExcludeSource = async (sourceId) => {
+    try {
+      await sourcesService.exclude(sourceId);
+      addToast({ type: 'success', message: 'Source excluded from generation' });
+      await loadData();
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Could not exclude source' });
+    }
+  };
+
   const handleAddManualFact = async (e) => {
     e.preventDefault();
     if (!newFactValue.trim()) return;
@@ -116,23 +163,53 @@ export default function VerificationPage() {
     }
   };
 
-  const handleStartGeneration = async () => {
-    if (conflicts.length > 0) {
-      addToast({
-        type: 'warning',
-        message: `Please resolve ${conflicts.length} conflicting facts before generating`,
-      });
-      return;
+  const handleStartGeneration = async (manualOnly = false) => {
+    if (generationLockRef.current || generating) return;
+
+    if (!manualOnly) {
+      if (conflicts.length > 0) {
+        addToast({
+          type: 'warning',
+          message: `Please resolve ${conflicts.length} conflicting facts before generating`,
+        });
+        return;
+      }
+      if (unverifiedFacts.length > 0) {
+        addToast({
+          type: 'warning',
+          message: `Please confirm or reject ${unverifiedFacts.length} unverified facts before generating`,
+        });
+        return;
+      }
+      if (blockingSources.length > 0) {
+        addToast({
+          type: 'warning',
+          message: 'Retry or exclude failed/mismatched sources, or choose Manual-only generation.',
+        });
+        return;
+      }
     }
 
+    generationLockRef.current = true;
     setGenerating(true);
     try {
-      const genRes = await generationService.generate(projectId);
+      const genRes = await generationService.generate(projectId, { manualOnly });
       const jobId = genRes?.data?.jobId;
-      addToast({ type: 'success', message: 'Generation started!' });
-      navigate(`/projects/${projectId}/generate?jobId=${jobId}`);
+      addToast({
+        type: 'success',
+        message: manualOnly ? 'Manual-only generation started!' : 'Generation started!',
+      });
+      navigate(`/projects/${projectId}/generate?jobId=${jobId}${manualOnly ? '&manualOnly=true' : ''}`);
     } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Generation failed' });
+      const code = err?.code;
+      const msg =
+        code === 'AI_RATE_LIMITED'
+          ? 'AI generation rate limit reached. Please wait a few minutes before generating again.'
+          : code === 'APP_RATE_LIMITED'
+          ? 'Too many API requests. Please wait a moment and try again.'
+          : err?.message || 'Generation failed';
+      addToast({ type: 'error', message: msg });
+      generationLockRef.current = false;
       setGenerating(false);
     }
   };
@@ -148,22 +225,37 @@ export default function VerificationPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          {conflicts.length > 0 ? (
+        <div className="flex items-center gap-3 flex-wrap">
+          {loading ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-primary-light text-primary border border-primary/30">
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              Loading facts…
+            </span>
+          ) : facts.length === 0 ? (
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-warning-light text-warning border border-warning/30">
               <AlertTriangle className="w-4 h-4" />
-              {conflicts.length} NEED REVIEW
+              No facts available – add manually or wait for extraction
             </span>
-          ) : (
+          ) : conflicts.length > 0 || unverifiedFacts.length > 0 ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-warning-light text-warning border border-warning/30">
+              <AlertTriangle className="w-4 h-4" />
+              {confirmedCount} Confirmed • {unverifiedFacts.length} Unverified • {conflicts.length} Conflicts
+            </span>
+          ) : blockingSources.length > 0 ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-warning-light text-warning border border-warning/30">
+              <AlertTriangle className="w-4 h-4" />
+              {blockingSources.length} Source(s) Need Review
+            </span>
+          ) : allVerifiedAndReady ? (
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-success-light text-success border border-success/30">
               <CheckCircle2 className="w-4 h-4" />
-              ALL FACTS VERIFIED
+              ALL FACTS VERIFIED ({confirmedCount})
             </span>
-          )}
+          ) : null}
 
           <button
-            onClick={handleStartGeneration}
-            disabled={generating || conflicts.length > 0}
+            onClick={() => handleStartGeneration(false)}
+            disabled={generating || !allVerifiedAndReady}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-sm transition disabled:opacity-40"
           >
             {generating ? 'Starting...' : 'Generate website →'}
@@ -197,35 +289,78 @@ export default function VerificationPage() {
               {sources.map((src) => {
                 const isCompleted = src.extractionStatus === 'completed';
                 const isFailed = src.extractionStatus === 'failed';
+                const isMismatched = src.relevance === 'mismatched';
+                const isExcluded = Boolean(src.excluded);
+
+                const badgeLabel = isExcluded
+                  ? 'Excluded'
+                  : isFailed
+                  ? 'Failed'
+                  : isMismatched
+                  ? 'Mismatched'
+                  : src.relevance === 'needs_review'
+                  ? 'Needs review'
+                  : isCompleted
+                  ? 'Relevant'
+                  : 'Processing';
+
+                const badgeClass = isExcluded
+                  ? 'text-slate-500'
+                  : isFailed || isMismatched
+                  ? 'text-red-600'
+                  : src.relevance === 'needs_review'
+                  ? 'text-warning'
+                  : isCompleted
+                  ? 'text-success'
+                  : 'text-primary';
 
                 return (
                   <div
                     key={src._id}
-                    className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/50"
+                    className={`p-3 rounded-xl border ${
+                      isExcluded
+                        ? 'border-slate-200/60 bg-slate-100/60 opacity-75'
+                        : isFailed || isMismatched
+                        ? 'border-red-200 bg-red-50/40'
+                        : 'border-slate-200/80 bg-slate-50/50'
+                    }`}
                   >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-semibold text-xs text-ink truncate max-w-[120px]">
+                    <div className="flex items-center justify-between mb-1 gap-2">
+                      <span className="font-semibold text-xs text-ink truncate max-w-[130px]">
                         {src.originalFileName || src.type.replace('_', ' ')}
                       </span>
-                      <span
-                        className={`text-[10px] font-semibold ${
-                          isCompleted
-                            ? 'text-success'
-                            : isFailed
-                            ? 'text-warning'
-                            : 'text-primary'
-                        }`}
-                      >
-                        {isCompleted
-                          ? 'Accessible'
-                          : isFailed
-                          ? 'Needs review'
-                          : 'Processing'}
+                      <span className={`text-[10px] font-semibold ${badgeClass}`}>
+                        {badgeLabel}
                       </span>
                     </div>
-                    <div className="text-[11px] text-ink-muted truncate">
+                    <div className="text-[11px] text-ink-muted truncate mb-1">
                       {src.url || `${src.mimeType || 'Uploaded file'}`}
                     </div>
+                    {(src.relevanceReason || src.errorMessage) && (
+                      <div className="text-[10px] text-red-600/90 leading-snug mb-2">
+                        {src.errorMessage || src.relevanceReason}
+                      </div>
+                    )}
+                    {src.type !== 'manual' && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleRetrySource(src._id)}
+                          className="text-[10px] font-semibold text-primary hover:underline"
+                        >
+                          Retry
+                        </button>
+                        {!isExcluded && (
+                          <button
+                            type="button"
+                            onClick={() => handleExcludeSource(src._id)}
+                            className="text-[10px] font-semibold text-red-600 hover:underline"
+                          >
+                            Exclude
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -303,16 +438,27 @@ export default function VerificationPage() {
                       </div>
                     )}
 
-                    {!isConflict && !isConfirmed && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDirectConfirm(fact._id, fact.selectedValue);
-                        }}
-                        className="mt-2 text-[11px] text-primary hover:underline font-semibold"
-                      >
-                        ✓ Confirm this value
-                      </button>
+                    {!isConflict && !isConfirmed && fact.status !== 'rejected' && (
+                      <div className="mt-2 flex items-center gap-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDirectConfirm(fact._id, fact.selectedValue);
+                          }}
+                          className="text-[11px] text-primary hover:underline font-semibold"
+                        >
+                          ✓ Confirm this value
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDirectReject(fact._id);
+                          }}
+                          className="text-[11px] text-red-600 hover:underline font-semibold"
+                        >
+                          ✕ Reject
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -445,17 +591,46 @@ export default function VerificationPage() {
                   You can edit this later.
                 </p>
               </div>
+            ) : unverifiedFacts.length > 0 ? (
+              <div className="text-center py-8">
+                <AlertTriangle className="w-8 h-8 text-warning mx-auto mb-2" />
+                <h3 className="text-sm font-bold text-ink mb-1">
+                  {unverifiedFacts.length} unverified fact{unverifiedFacts.length > 1 ? 's' : ''}
+                </h3>
+                <p className="text-xs text-ink-muted mb-5">
+                  Review and confirm or reject each unverified fact before generating your website.
+                </p>
+              </div>
+            ) : blockingSources.length > 0 ? (
+              <div className="text-center py-8">
+                <AlertTriangle className="w-8 h-8 text-warning mx-auto mb-2" />
+                <h3 className="text-sm font-bold text-ink mb-1">
+                  {blockingSources.length} source{blockingSources.length > 1 ? 's' : ''} need attention
+                </h3>
+                <p className="text-xs text-ink-muted mb-5">
+                  Retry or exclude failed/mismatched sources in the left column, or generate using only your confirmed manual facts.
+                </p>
+                {manualConfirmedCount > 0 && (
+                  <button
+                    onClick={() => handleStartGeneration(true)}
+                    disabled={generating}
+                    className="w-full px-4 py-2.5 rounded-xl border border-primary text-primary hover:bg-primary-light/40 text-xs font-semibold transition"
+                  >
+                    Generate with Manual Facts Only →
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="text-center py-12">
                 <CheckCircle2 className="w-8 h-8 text-success mx-auto mb-2" />
-                <h3 className="text-sm font-bold text-ink mb-1">No pending conflicts</h3>
+                <h3 className="text-sm font-bold text-ink mb-1">All facts verified</h3>
                 <p className="text-xs text-ink-muted mb-5">
-                  All found facts are ready. You can proceed to AI generation.
+                  All {confirmedCount} facts are confirmed. You can proceed to AI generation.
                 </p>
                 <button
-                  onClick={handleStartGeneration}
-                  disabled={generating}
-                  className="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-sm transition"
+                  onClick={() => handleStartGeneration(false)}
+                  disabled={generating || !allVerifiedAndReady}
+                  className="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-sm transition disabled:opacity-40"
                 >
                   Generate website now →
                 </button>

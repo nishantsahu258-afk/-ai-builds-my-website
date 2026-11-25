@@ -25,6 +25,8 @@ export const sourcesService = {
   },
   addLink: (projectId, data) => api.post(`/projects/${projectId}/sources/links`, data),
   list: (projectId) => api.get(`/projects/${projectId}/sources`),
+  exclude: (sourceId) => api.post(`/sources/${sourceId}/exclude`),
+  retry: (sourceId) => api.post(`/sources/${sourceId}/retry`),
   delete: (sourceId) => api.delete(`/sources/${sourceId}`),
 };
 
@@ -54,7 +56,7 @@ export const publishingService = {
 };
 
 export const generationService = {
-  generate: (projectId) => api.post(`/projects/${projectId}/generate`),
+  generate: (projectId, data = {}) => api.post(`/projects/${projectId}/generate`, data),
   startResearch: (projectId) => api.post(`/projects/${projectId}/research`),
   getResearchStatus: (projectId) => api.get(`/projects/${projectId}/research-status`),
   getJobStatus: (jobId) => api.get(`/jobs/${jobId}`),

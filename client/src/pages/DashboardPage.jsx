@@ -63,7 +63,7 @@ export default function DashboardPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
           <h1 className="text-2xl font-bold text-ink">
-            Good morning, {user?.name?.split(' ')[0] || 'Alex'}
+            Good morning, {user?.name?.split(' ')[0] || 'there'}
           </h1>
           <p className="text-sm text-ink-muted mt-0.5">
             Turn the information you already have into a website.
@@ -132,9 +132,12 @@ export default function DashboardPage() {
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold text-ink">Recent websites</h2>
-          <span className="text-xs font-semibold text-primary cursor-pointer hover:underline">
+          <button
+            onClick={() => navigate('/projects')}
+            className="text-xs font-semibold text-primary cursor-pointer hover:underline"
+          >
             View all →
-          </span>
+          </button>
         </div>
 
         {loading ? (

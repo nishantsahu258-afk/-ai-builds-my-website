@@ -129,8 +129,8 @@ export default function PublicSitePage() {
             <div className="max-w-6xl mx-auto px-6 grid grid-cols-1 md:grid-cols-12 gap-12 items-center">
               <div className="md:col-span-7">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase bg-white border border-primary/20 text-primary shadow-2xs mb-5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-success" />
-                  CONFIRMED & VERIFIED BUSINESS
+                  <ShieldCheck className={`w-3.5 h-3.5 ${siteData.hasConfirmedProvenance ? 'text-success' : 'text-primary'}`} />
+                  {siteData.hasConfirmedProvenance ? 'CONFIRMED & VERIFIED BUSINESS' : 'BUSINESS WEBSITE'}
                 </div>
                 <h1 className="text-3xl md:text-5xl font-extrabold text-ink tracking-tight leading-[1.15] mb-4">
                   {heroSec.content?.headline || `${businessName}, presented with clarity.`}
@@ -302,7 +302,10 @@ export default function PublicSitePage() {
       <footer className="border-t border-slate-100 bg-white py-8 text-center text-xs text-ink-muted">
         <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
           <div>
-            © {new Date().getFullYear()} {businessName}. All verified information backed by sources.
+            © {new Date().getFullYear()} {businessName}.{' '}
+            {siteData.hasConfirmedProvenance
+              ? 'Information confirmed by the business owner.'
+              : 'Business website.'}
           </div>
           <div className="text-[11px] text-slate-400">
             Powered by <span className="font-semibold text-primary">AI Builds My Website</span>

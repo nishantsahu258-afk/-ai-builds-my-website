@@ -1,7 +1,7 @@
-import mongoose from 'mongoose';
-import { Project, Business, Source, Fact } from '../../models/index.js';
-import { success } from '../../utils/response.js';
-import { logger } from '../../utils/logger.js';
+import mongoose from "mongoose";
+import { Project, Business, Source, Fact } from "../../models/index.js";
+import { success } from "../../utils/response.js";
+import { logger } from "../../utils/logger.js";
 
 // ---------------------------------------------------------------------------
 // GET /projects
@@ -17,11 +17,11 @@ export const listProjects = async (req, res, next) => {
       ownerId: req.user.id,
       deleted: { $ne: true },
     })
-      .populate('businessId')
+      .populate("businessId")
       .sort({ updatedAt: -1 })
       .lean();
 
-    return success(res, { projects }, 'Projects retrieved successfully');
+    return success(res, { projects }, "Projects retrieved successfully");
   } catch (err) {
     next(err);
   }
@@ -40,7 +40,15 @@ export const createProject = async (req, res, next) => {
   session.startTransaction();
 
   try {
-    const { businessName, city, state, country, category, description, address } = req.body;
+    const {
+      businessName,
+      city,
+      state,
+      country,
+      category,
+      description,
+      address,
+    } = req.body;
 
     // 1. Create the Business
     const [business] = await Business.create(
@@ -49,7 +57,7 @@ export const createProject = async (req, res, next) => {
           name: businessName,
           city: city ?? null,
           state: state ?? null,
-          country: country ?? 'India',
+          country: country ?? "India",
           category: category ?? null,
           description: description ?? null,
           address: address ?? null,
@@ -66,21 +74,64 @@ export const createProject = async (req, res, next) => {
           title: businessName,
           businessId: business._id,
           ownerId: req.user.id,
-          status: 'draft',
+          status: "draft",
         },
       ],
       { session },
     );
 
+    // Create manual facts for supplied business fields within the same transaction
+    const manualFacts = [];
+    const manualFields = {
+      businessName,
+      city,
+      state,
+      country,
+      category,
+      description,
+      address,
+    };
+    for (const [key, value] of Object.entries(manualFields)) {
+      if (value !== undefined && value !== null && value !== '') {
+        const candidate = {
+          value,
+          extractionMethod: 'manual',
+          evidenceExcerpt: 'Manually entered by business owner',
+          extractedAt: new Date(),
+        };
+        manualFacts.push({
+          projectId: project._id,
+          key,
+          candidates: [candidate],
+          selectedValue: value,
+          status: 'confirmed',
+          confirmedBy: req.user.id,
+          confirmedAt: new Date(),
+        });
+      }
+    }
+    if (manualFacts.length > 0) {
+      await Fact.insertMany(manualFacts, { session });
+    }
+
     await session.commitTransaction();
     session.endSession();
 
     // Populate business on the returned document
-    const populated = await Project.findById(project._id).populate('businessId').lean();
+    const populated = await Project.findById(project._id)
+      .populate("businessId")
+      .lean();
 
-    logger.info(`[Projects] Created project ${project._id} for user ${req.user.id}`);
+    logger.info(
+      `[Projects] Created project ${project._id} for user ${req.user.id}`,
+    );
 
-    return success(res, { project: populated }, 'Project created successfully', 201);
+    return success(
+      res,
+      { project: populated },
+      "Project created successfully",
+      201,
+    );
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
@@ -99,11 +150,11 @@ export const createProject = async (req, res, next) => {
 export const getProject = async (req, res, next) => {
   try {
     const project = await Project.findById(req.project._id)
-      .populate('businessId')
-      .populate('currentWebsiteId')
+      .populate("businessId")
+      .populate("currentWebsiteId")
       .lean();
 
-    return success(res, { project }, 'Project retrieved successfully');
+    return success(res, { project }, "Project retrieved successfully");
   } catch (err) {
     next(err);
   }
@@ -118,8 +169,17 @@ export const getProject = async (req, res, next) => {
  */
 export const updateProject = async (req, res, next) => {
   try {
-    const { title, status, businessName, city, state, country, category, description, address } =
-      req.body;
+    const {
+      title,
+      status,
+      businessName,
+      city,
+      state,
+      country,
+      category,
+      description,
+      address,
+    } = req.body;
 
     // Build project update payload
     const projectUpdate = {};
@@ -140,7 +200,11 @@ export const updateProject = async (req, res, next) => {
 
     if (Object.keys(projectUpdate).length > 0) {
       updates.push(
-        Project.findByIdAndUpdate(req.project._id, { $set: projectUpdate }, { new: true }),
+        Project.findByIdAndUpdate(
+          req.project._id,
+          { $set: projectUpdate },
+          { new: true },
+        ),
       );
     }
 
@@ -157,13 +221,15 @@ export const updateProject = async (req, res, next) => {
     await Promise.all(updates);
 
     const updated = await Project.findById(req.project._id)
-      .populate('businessId')
-      .populate('currentWebsiteId')
+      .populate("businessId")
+      .populate("currentWebsiteId")
       .lean();
 
-    logger.info(`[Projects] Updated project ${req.project._id} by user ${req.user.id}`);
+    logger.info(
+      `[Projects] Updated project ${req.project._id} by user ${req.user.id}`,
+    );
 
-    return success(res, { project: updated }, 'Project updated successfully');
+    return success(res, { project: updated }, "Project updated successfully");
   } catch (err) {
     next(err);
   }
@@ -209,9 +275,11 @@ export const deleteProject = async (req, res, next) => {
     await session.commitTransaction();
     session.endSession();
 
-    logger.info(`[Projects] Soft-deleted project ${projectId} by user ${req.user.id}`);
+    logger.info(
+      `[Projects] Soft-deleted project ${projectId} by user ${req.user.id}`,
+    );
 
-    return success(res, null, 'Project deleted successfully');
+    return success(res, null, "Project deleted successfully");
   } catch (err) {
     await session.abortTransaction();
     session.endSession();

@@ -62,7 +62,23 @@ function buildLocalAdapter() {
      * @returns {string}
      */
     getFilePath(key) {
-      return path.join(baseDir, key);
+      if (!key || typeof key !== 'string') {
+        throw new Error('Invalid storage key');
+      }
+      if (path.isAbsolute(key)) {
+        const resolvedAbs = path.resolve(key);
+        if (!resolvedAbs.startsWith(baseDir + path.sep) && resolvedAbs !== baseDir) {
+          throw new Error('Invalid storage key: path traversal detected');
+        }
+        return resolvedAbs;
+      }
+      // Normalize Windows/POSIX separators and strip at most one leading 'uploads/'
+      const normalized = key.replace(/\\/g, '/').replace(/^uploads\//, '');
+      const resolved = path.resolve(baseDir, normalized);
+      if (!resolved.startsWith(baseDir + path.sep)) {
+        throw new Error('Invalid storage key: path traversal detected');
+      }
+      return resolved;
     },
 
     /**

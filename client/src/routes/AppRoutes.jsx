@@ -5,6 +5,11 @@ import { useAuth } from '../context/AuthContext.jsx';
 import LoginPage from '../pages/LoginPage.jsx';
 import RegisterPage from '../pages/RegisterPage.jsx';
 import DashboardPage from '../pages/DashboardPage.jsx';
+import WebsitesPage from '../pages/WebsitesPage.jsx';
+import SourcesPage from '../pages/SourcesPage.jsx';
+import SettingsPage from '../pages/SettingsPage.jsx';
+import HelpCenterPage from '../pages/HelpCenterPage.jsx';
+import DocumentationPage from '../pages/DocumentationPage.jsx';
 import CreateWebsitePage from '../pages/CreateWebsitePage.jsx';
 import VerificationPage from '../pages/VerificationPage.jsx';
 import GenerationPage from '../pages/GenerationPage.jsx';
@@ -75,7 +80,39 @@ export default function AppRoutes() {
         path="/projects"
         element={
           <ProtectedRoute>
-            <DashboardPage />
+            <WebsitesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/sources"
+        element={
+          <ProtectedRoute>
+            <SourcesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <SettingsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/help"
+        element={
+          <ProtectedRoute>
+            <HelpCenterPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/docs"
+        element={
+          <ProtectedRoute>
+            <DocumentationPage />
           </ProtectedRoute>
         }
       />

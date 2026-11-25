@@ -1,11 +1,12 @@
 import fs from 'fs/promises';
 import pdfParse from 'pdf-parse';
-import { Source } from '../models/index.js';
+import { Source, Project } from '../models/index.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { fetchAndExtract } from '../integrations/scraper/scraper.service.js';
 import { analyzeImage } from '../integrations/gemini/gemini.client.js';
 import { extractFactsFromText, normalizeAndStoreFacts } from '../utils/factExtractor.js';
+import { assessSourceRelevance } from '../utils/sourceRelevance.js';
 import { getStorageService } from '../integrations/storage/storage.service.js';
 
 /**
@@ -25,6 +26,11 @@ export async function processSourceRecord(sourceId) {
     if (source.type === 'pdf') {
       const storage = getStorageService();
       const filePath = storage.getFilePath(source.storageKey);
+      try {
+        await fs.access(filePath);
+      } catch {
+        throw new Error(`Uploaded PDF file not found at ${filePath}. Please re-upload the file.`);
+      }
       const dataBuffer = await fs.readFile(filePath);
 
       const pdfData = await pdfParse(dataBuffer);
@@ -32,6 +38,11 @@ export async function processSourceRecord(sourceId) {
     } else if (source.type === 'image') {
       const storage = getStorageService();
       const filePath = storage.getFilePath(source.storageKey);
+      try {
+        await fs.access(filePath);
+      } catch {
+        throw new Error(`Uploaded image file not found at ${filePath}. Please re-upload the file.`);
+      }
       const dataBuffer = await fs.readFile(filePath);
       const base64Image = dataBuffer.toString('base64');
 
@@ -52,6 +63,8 @@ Do NOT invent, assume, or fabricate any details not clearly legible in the image
       if (!scrapeRes.success) {
         if (source.type === 'social') {
           source.extractionStatus = 'failed';
+          source.relevance = 'failed';
+          source.relevanceReason = 'Unable to access this social media source automatically.';
           source.errorMessage = 'Unable to access this social media source automatically. Please provide the information manually.';
           await source.save();
           return;
@@ -64,19 +77,34 @@ Do NOT invent, assume, or fabricate any details not clearly legible in the image
 
     source.extractedText = extractedText;
 
-    // Extract facts using Gemini + regex fallback
-    const facts = await extractFactsFromText(extractedText, source._id, source.url);
+    // Assess source relevance against target business before importing any facts
+    const project = await Project.findById(source.projectId).populate('businessId').lean();
+    const business = project?.businessId || { name: project?.title || '' };
+    const relevanceResult = assessSourceRelevance({ business, source, extractedText });
+    source.relevance = relevanceResult.relevance;
+    source.relevanceReason = relevanceResult.reason;
 
-    // Normalize and store into Fact collection (detecting conflicts)
-    await normalizeAndStoreFacts(source.projectId, facts, source._id, source.url);
+    if (source.relevance === 'relevant') {
+      // Extract facts using Gemini + regex fallback
+      const facts = await extractFactsFromText(extractedText, source._id, source.url);
+
+      // Normalize and store into Fact collection (detecting conflicts)
+      await normalizeAndStoreFacts(source.projectId, facts, source._id, source.url);
+    } else {
+      logger.warn(
+        `[sourceWorker] Source ${source._id} flagged as '${source.relevance}' (${source.relevanceReason}); skipping fact import.`
+      );
+    }
 
     source.extractionStatus = 'completed';
     await source.save();
 
-    logger.info(`[sourceWorker] Successfully processed source ${source._id} (${source.type})`);
+    logger.info(`[sourceWorker] Successfully processed source ${source._id} (${source.type}, relevance=${source.relevance})`);
   } catch (err) {
     logger.error(`[sourceWorker] Failed to process source ${source._id}:`, err.message);
     source.extractionStatus = 'failed';
+    source.relevance = 'failed';
+    source.relevanceReason = err.message;
     source.errorMessage = err.message;
     await source.save();
   }

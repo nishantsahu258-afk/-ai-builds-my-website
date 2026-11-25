@@ -3,6 +3,7 @@ import { researchQueue, addJob } from '../../queue/queue.js';
 import { search } from '../../integrations/search/search.service.js';
 import { fetchAndExtract } from '../../integrations/scraper/scraper.service.js';
 import { extractFactsFromText, normalizeAndStoreFacts } from '../../utils/factExtractor.js';
+import { assessSourceRelevance } from '../../utils/sourceRelevance.js';
 import { success, error } from '../../utils/response.js';
 import { logger } from '../../utils/logger.js';
 
@@ -67,37 +68,51 @@ export async function executeBusinessResearch(projectId, jobId = null) {
         if (scraped.success && scraped.text) {
           sourceDoc.extractedText = scraped.text;
           sourceDoc.extractionStatus = 'completed';
+
+          const relevanceResult = assessSourceRelevance({
+            business: business || { name: businessName },
+            source: sourceDoc,
+            extractedText: scraped.text,
+          });
+          sourceDoc.relevance = relevanceResult.relevance;
+          sourceDoc.relevanceReason = relevanceResult.reason;
           await sourceDoc.save();
 
-          // Extract facts
-          const extractedFacts = await extractFactsFromText(scraped.text, sourceDoc._id, resItem.url);
+          if (sourceDoc.relevance === 'relevant') {
+            // Extract facts only from relevant sources
+            const extractedFacts = await extractFactsFromText(scraped.text, sourceDoc._id, resItem.url);
 
-          // Add contact info discovered directly by scraper
-          for (const phone of scraped.phones || []) {
-            extractedFacts.push({
-              key: 'phone',
-              value: phone,
-              evidenceExcerpt: `Phone found on website: ${phone}`,
-              extractionMethod: 'scraped_contact',
-              sourceId: sourceDoc._id,
-              sourceURL: resItem.url,
-            });
+            // Add contact info discovered directly by scraper
+            for (const phone of scraped.phones || []) {
+              extractedFacts.push({
+                key: 'phone',
+                value: phone,
+                evidenceExcerpt: `Phone found on website: ${phone}`,
+                extractionMethod: 'scraped_contact',
+                sourceId: sourceDoc._id,
+                sourceURL: resItem.url,
+              });
+            }
+
+            for (const email of scraped.emails || []) {
+              extractedFacts.push({
+                key: 'email',
+                value: email,
+                evidenceExcerpt: `Email found on website: ${email}`,
+                extractionMethod: 'scraped_contact',
+                sourceId: sourceDoc._id,
+                sourceURL: resItem.url,
+              });
+            }
+
+            await normalizeAndStoreFacts(projectId, extractedFacts, sourceDoc._id, resItem.url);
+          } else {
+            logger.warn(`[Research] Skipping fact import for ${resItem.url} (relevance=${sourceDoc.relevance})`);
           }
-
-          for (const email of scraped.emails || []) {
-            extractedFacts.push({
-              key: 'email',
-              value: email,
-              evidenceExcerpt: `Email found on website: ${email}`,
-              extractionMethod: 'scraped_contact',
-              sourceId: sourceDoc._id,
-              sourceURL: resItem.url,
-            });
-          }
-
-          await normalizeAndStoreFacts(projectId, extractedFacts, sourceDoc._id, resItem.url);
         } else {
           sourceDoc.extractionStatus = 'failed';
+          sourceDoc.relevance = 'failed';
+          sourceDoc.relevanceReason = scraped.error || 'Could not access web page';
           sourceDoc.errorMessage = scraped.error || 'Could not access web page';
           await sourceDoc.save();
         }
