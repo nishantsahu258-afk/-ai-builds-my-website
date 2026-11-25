@@ -12,4 +12,3 @@ router.get('/projects/:id/research-status', authenticate, checkProjectOwnership,
 
 export default router;
 
-export default router;
